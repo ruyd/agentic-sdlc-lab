@@ -1,0 +1,29 @@
+# Push a tag like v0.2.0 → Claude drafts release notes → a DRAFT release a human publishes.
+name: Release notes
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release   # add required reviewers to this environment in repo settings
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Draft release notes for tag ${{ github.ref_name }}.
+            Find the previous tag with `git describe --tags --abbrev=0 ${{ github.ref_name }}^` (if none, use all history).
+            Group commits by Conventional Commit type: Features, Fixes, Docs, Chores. Mark agent-authored commits with (agent).
+            Write the notes to release-notes.md, then run:
+            gh release create ${{ github.ref_name }} --draft --title "${{ github.ref_name }}" --notes-file release-notes.md
+          claude_args: >-
+            --max-turns 10
+            --model haiku
+            --allowedTools "Write,Bash(git describe:*),Bash(git log:*),Bash(gh release create:*)"

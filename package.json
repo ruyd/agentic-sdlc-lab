@@ -1,0 +1,30 @@
+{
+  "name": "agentic-sdlc-lab",
+  "version": "0.1.0",
+  "description": "Practice repo: Claude agents across the software lifecycle with guardrails, evals and multi-agent orchestration",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "evals": "tsx evals/run-evals.ts",
+    "orchestrate": "tsx agents/orchestrator.ts",
+    "triage": "tsx agents/triage.ts",
+    "report": "tsx scripts/report.ts"
+  },
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.322",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  }
+}

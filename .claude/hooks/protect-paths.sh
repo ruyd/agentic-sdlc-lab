@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# PreToolUse hook: blocks agent edits to protected paths.
+# Exit code 2 blocks the tool call and sends stderr back to Claude.
+set -euo pipefail
+input="$(cat)"
+file="$(printf '%s' "$input" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);process.stdout.write(j.tool_input?.file_path ?? "")})')"
+rel="${file#"$CLAUDE_PROJECT_DIR"/}"
+case "$rel" in
+  .github/workflows/*|.claude/settings.json|.claude/hooks/*|.github/CODEOWNERS|.env|.env.*)
+    echo "Blocked: $rel is protected. Changes to it must come from a human PR (see CLAUDE.md)." >&2
+    exit 2 ;;
+esac
+exit 0

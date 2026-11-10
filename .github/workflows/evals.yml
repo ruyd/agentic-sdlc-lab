@@ -1,0 +1,25 @@
+# Runs the agent eval suite when agent code or eval cases change. Fails the PR on regression.
+name: Agent evals
+on:
+  pull_request:
+    paths: ["agents/**", "evals/**", ".claude/agents/**"]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  evals:
+    # Secrets are not available to fork PRs; skip them instead of failing.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run evals
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: eval-report, path: runs/ }

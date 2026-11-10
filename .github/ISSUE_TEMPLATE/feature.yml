@@ -1,0 +1,28 @@
+name: Feature / user story
+description: Something the product should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: story
+    attributes:
+      label: User story
+      placeholder: As a <role>, I want <capability> so that <benefit>.
+    validations: { required: true }
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: |
+        - Given ..., when ..., then ...
+    validations: { required: true }
+  - type: dropdown
+    id: size
+    attributes:
+      label: Size estimate
+      options: [S, M, L, "Don't know"]
+  - type: checkboxes
+    id: agent
+    attributes:
+      label: Agent
+      options:
+        - label: OK for an agent to implement (comment `@claude` to start)

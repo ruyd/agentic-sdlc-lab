@@ -1,0 +1,6 @@
+# Sensitive paths need the owner's review, whoever (or whatever) opened the PR.
+/.github/      @ruyd
+/.claude/      @ruyd
+/agents/       @ruyd
+/evals/        @ruyd
+CLAUDE.md      @ruyd
