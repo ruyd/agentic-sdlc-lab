@@ -21,7 +21,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Check this repo for drift:
+            Check this repo for drift. Use the Read, Grep and Glob tools to read files; shell commands
+            other than the ones listed in allowedTools are denied, so do not try cat, ls or find.
             1. Commands in README.md and CLAUDE.md that no longer exist in package.json scripts.
             2. `npm outdated` results with a major version behind.
             3. Files referenced in docs/ that no longer exist.
@@ -29,6 +30,6 @@ jobs:
             only if something new was found. Otherwise, if drift was found, open ONE issue labeled `drift`
             with a checklist. If nothing drifted, do nothing.
           claude_args: >-
-            --max-turns 15
+            --max-turns 30
             --model haiku
             --allowedTools "Read,Grep,Glob,Bash(npm outdated:*),Bash(gh issue list:*),Bash(gh issue create:*),Bash(gh issue comment:*)"
