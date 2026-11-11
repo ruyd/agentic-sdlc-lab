@@ -2,5 +2,6 @@ node_modules/
 runs/
 .env
 .env.*
-release-notes.md
+/release-notes.md
 .DS_Store
+/drift-report.md
