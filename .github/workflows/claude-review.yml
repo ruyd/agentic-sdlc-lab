@@ -39,9 +39,10 @@ jobs:
         run: scripts/red-green.sh origin/${{ github.base_ref }}
       - name: Honest PR body
         if: github.event.pull_request.user.login != 'dependabot[bot]'
+        # Read the live body, not the event payload: a re-run after fixing the body must see the fix.
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: npx tsx scripts/check-pr-body.ts
+          GH_TOKEN: ${{ github.token }}
+        run: PR_BODY="$(gh pr view ${{ github.event.pull_request.number }} --json body --jq .body)" npx tsx scripts/check-pr-body.ts
       - name: Security - npm audit
         run: npm audit --audit-level=high
 
