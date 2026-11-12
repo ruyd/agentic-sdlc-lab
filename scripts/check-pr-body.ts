@@ -3,10 +3,17 @@
 //   PR_BODY="..." npx tsx scripts/check-pr-body.ts
 const REQUIRED = ["## What I tested", "## What I did not test", "## Assumptions", "## Risk tier", "## Evidence"];
 const body = process.env.PR_BODY ?? "";
+
+/** Text a reader actually sees: drops <!-- comments -->, and everything after an unclosed <!-- (Markdown hides it too). */
+function visibleText(markdown: string): string {
+  const [before = "", ...rest] = markdown.split("<!--");
+  return before + rest.map((chunk) => (chunk.includes("-->") ? chunk.slice(chunk.indexOf("-->") + 3) : "")).join("");
+}
+
 const missing = REQUIRED.filter((h) => !body.includes(h));
 const empty = REQUIRED.filter((h) => {
-  const after = body.split(h)[1]?.split(/\n## /)[0] ?? "";
-  return body.includes(h) && after.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
+  const section = body.split(h)[1]?.split(/\n## /)[0] ?? "";
+  return body.includes(h) && visibleText(section).trim().length === 0;
 });
 if (missing.length || empty.length) {
   if (missing.length) console.error(`Missing sections: ${missing.join(", ")}`);
