@@ -65,10 +65,9 @@ Auth: your local Claude Code login works; CI uses the `CLAUDE_CODE_OAUTH_TOKEN` 
 ## GitHub setup checklist
 
 - [x] Public repo, `CLAUDE_CODE_OAUTH_TOKEN` secret, Claude GitHub App
-- [x] Ruleset on `main`: PR, 1 approval, Code Owner review, required checks `test` and `analyze`
+- [x] Ruleset on `main`: PR, 1 approval, Code Owner review, required checks `test`, `analyze` and `gates`
 - [x] `release` environment with a required reviewer
-- [ ] Add `gates` to the ruleset's required checks
-- [ ] Labels: `ready`, `needs-info`, `risk:high`, `risk:medium`, `risk:low`, `escaped-defect`, `no-red-test`
+- [x] Labels: `ready`, `needs-info`, `risk:high`, `risk:medium`, `risk:low`, `escaped-defect`, `no-red-test`
 
 ## Metrics
 
