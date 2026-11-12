@@ -8,48 +8,55 @@ const lines = [
 
 describe("computeTotals", () => {
   it("adds lines and tax", () => {
-    expect(computeTotals(lines, 0.1)).toEqual({ subtotalCents: 22_500, lineDiscountCents: 0, discountCents: 0, taxCents: 2_250, totalCents: 24_750 });
+    expect(computeTotals(lines, 0.1)).toEqual({ subtotalCents: 22_500, discountCents: 0, taxCents: 2_250, totalCents: 24_750 });
   });
 
   it("applies the discount before tax", () => {
-    expect(computeTotals(lines, 0.1, 10)).toEqual({ subtotalCents: 22_500, lineDiscountCents: 0, discountCents: 2_250, taxCents: 2_025, totalCents: 22_275 });
+    expect(computeTotals(lines, 0.1, 10)).toEqual({ subtotalCents: 22_500, discountCents: 2_250, taxCents: 2_025, totalCents: 22_275 });
   });
 
+  // Line discounts (issue #4): each line is reduced first, so subtotalCents is net and the invariant still holds.
   it("applies a line discount to only that line, before tax", () => {
     const discounted = [{ ...lines[0]!, discountPercent: 10 }, lines[1]!];
-    expect(computeTotals(discounted, 0.1)).toEqual({ subtotalCents: 22_500, lineDiscountCents: 2_000, discountCents: 0, taxCents: 2_050, totalCents: 22_550 });
+    expect(computeTotals(discounted, 0.1)).toEqual({ subtotalCents: 20_500, discountCents: 0, taxCents: 2_050, totalCents: 22_550 });
   });
 
   it("applies line discounts first, then the invoice discount", () => {
     const discounted = [{ ...lines[0]!, discountPercent: 10 }, lines[1]!];
-    expect(computeTotals(discounted, 0.1, 10)).toEqual({ subtotalCents: 22_500, lineDiscountCents: 2_000, discountCents: 2_050, taxCents: 1_845, totalCents: 20_295 });
+    expect(computeTotals(discounted, 0.1, 10)).toEqual({ subtotalCents: 20_500, discountCents: 2_050, taxCents: 1_845, totalCents: 20_295 });
   });
 
-  it("rejects out-of-range line discounts", () => {
-    expect(() => computeTotals([{ ...lines[0]!, discountPercent: -1 }], 0)).toThrow(RangeError);
-    expect(() => computeTotals([{ ...lines[0]!, discountPercent: 101 }], 0)).toThrow(RangeError);
-    expect(() => computeTotals([{ ...lines[0]!, discountPercent: 101 }], 0)).toThrow(/between 0 and 100 on "Consulting"/);
+  it("leaves totals unchanged when no line has a discount", () => {
+    const explicitZero = lines.map((l) => ({ ...l, discountPercent: 0 }));
+    expect(computeTotals(explicitZero, 0.1, 10)).toEqual(computeTotals(lines, 0.1, 10));
   });
 
   it("accepts line discount boundaries 0 and 100", () => {
-    const zero = [{ ...lines[0]!, discountPercent: 0 }];
-    expect(computeTotals(zero, 0)).toEqual({ subtotalCents: 20_000, lineDiscountCents: 0, discountCents: 0, taxCents: 0, totalCents: 20_000 });
-    const full = [{ ...lines[0]!, discountPercent: 100 }];
-    expect(computeTotals(full, 0.1)).toEqual({ subtotalCents: 20_000, lineDiscountCents: 20_000, discountCents: 0, taxCents: 0, totalCents: 0 });
+    expect(computeTotals([{ ...lines[0]!, discountPercent: 0 }], 0).subtotalCents).toBe(20_000);
+    expect(computeTotals([{ ...lines[0]!, discountPercent: 100 }], 0.1)).toEqual({ subtotalCents: 0, discountCents: 0, taxCents: 0, totalCents: 0 });
   });
 
-  it("rejects non-finite discounts and tax rates", () => {
-    expect(() => computeTotals([{ ...lines[0]!, discountPercent: NaN }], 0)).toThrow(RangeError);
-    expect(() => computeTotals([{ ...lines[0]!, discountPercent: Infinity }], 0)).toThrow(RangeError);
-    expect(() => computeTotals(lines, 0.1, NaN)).toThrow(RangeError);
-    expect(() => computeTotals(lines, NaN)).toThrow(RangeError);
+  it("rounds each line's discount on its own", () => {
+    const pennies = [1, 2, 3].map((i) => ({ description: `item ${i}`, quantity: 1, unitPriceCents: 5, discountPercent: 10 }));
+    expect(computeTotals(pennies, 0).subtotalCents).toBe(12); // 0.5c rounds to 1c per line: 3 x 4c
+  });
+
+  it("rejects out-of-range and non-finite line discounts, naming the line", () => {
+    for (const bad of [-1, 101, NaN, Infinity]) {
+      expect(() => computeTotals([{ ...lines[0]!, discountPercent: bad }], 0)).toThrow(/discountPercent must be between 0 and 100 on "Consulting"/);
+    }
+  });
+
+  it("rejects non-finite tax rates and invoice discounts", () => {
+    expect(() => computeTotals(lines, NaN)).toThrow(/taxRate must be between 0 and 1/);
     expect(() => computeTotals(lines, Infinity)).toThrow(RangeError);
+    expect(() => computeTotals(lines, 0.1, NaN)).toThrow(/discountPercent must be between 0 and 100/);
   });
 
   // Added after mutation testing showed these boundaries were unpinned.
   it("accepts the discount boundaries 0 and 100", () => {
     expect(computeTotals(lines, 0.1, 0).discountCents).toBe(0);
-    expect(computeTotals(lines, 0.1, 100)).toEqual({ subtotalCents: 22_500, lineDiscountCents: 0, discountCents: 22_500, taxCents: 0, totalCents: 0 });
+    expect(computeTotals(lines, 0.1, 100)).toEqual({ subtotalCents: 22_500, discountCents: 22_500, taxCents: 0, totalCents: 0 });
   });
 
   it("accepts the tax boundaries 0 and 1", () => {
@@ -58,9 +65,9 @@ describe("computeTotals", () => {
   });
 
   it("names the bad argument in the error", () => {
-    expect(() => computeTotals(lines, -0.1)).toThrow(/taxRate must be a finite number between 0 and 1/);
-    expect(() => computeTotals(lines, 0.1, -1)).toThrow(/discountPercent must be a finite number between 0 and 100/);
-    expect(() => computeTotals(lines, 0.1, 101)).toThrow(/discountPercent must be a finite number between 0 and 100/);
+    expect(() => computeTotals(lines, -0.1)).toThrow(/taxRate must be between 0 and 1/);
+    expect(() => computeTotals(lines, 0.1, -1)).toThrow(/discountPercent must be between 0 and 100/);
+    expect(() => computeTotals(lines, 0.1, 101)).toThrow(/discountPercent must be between 0 and 100/);
   });
 
   it("handles an empty invoice", () => {
