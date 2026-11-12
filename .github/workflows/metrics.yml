@@ -1,0 +1,24 @@
+# Weekly pipeline metrics: agent PR merge rate, rework, escaped defects. Output goes to the job summary.
+name: "Measure · Pipeline metrics"
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      days: { description: "Window in days", default: "30" }
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx tsx scripts/metrics.ts ${{ inputs.days || 30 }} | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

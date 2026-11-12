@@ -1,62 +1,67 @@
 # Architecture
 
-## Where agents act in the lifecycle
+## Pipeline
 
 ```mermaid
 flowchart LR
-  subgraph Plan
-    I[New issue] -->|triage.yml · haiku · label/comment only| T[Labeled issue]
-  end
-  subgraph Build
-    T -->|"@claude" by trusted user · claude.yml| PR[Agent PR]
-    L[Local: npm run orchestrate] --> W[git worktree branch] --> PR
-  end
-  subgraph Review
-    PR --> CI[ci.yml · tests + typecheck]
-    PR --> EV[evals.yml · agent evals]
-    PR --> RV[claude-review.yml · first-pass review]
-    CI & EV & RV --> H{Human approval\nruleset + CODEOWNERS}
-  end
-  subgraph Release
-    H -->|merge to main| M[main]
-    M -->|tag v*| RN[release-notes.yml · draft release\nenvironment approval]
-  end
-  subgraph Operate
-    N[nightly-drift.yml] -->|one issue max| I
-  end
+  I[New issue] --> G1{1 Intake gate<br/>repro steps / criteria?}
+  G1 -->|missing| Q[Ask reporter<br/>needs-info] --> I
+  G1 -->|ready| P[2 Plan<br/>reads context/]
+  P -->|low confidence| H1[Escalate to human]
+  P --> F[3 Fix<br/>red test → fix → green]
+  F --> R{4 Review}
+  R --> D[Gates: risk tier, red-green,<br/>honest PR body, npm audit]
+  R --> RV[Reviewer agent<br/>diff vs plan, rules, security]
+  R --> AD[Adversary agent<br/>fresh context, breaks it]
+  R --> MU[Mutation + property tests<br/>high risk only]
+  D & RV & AD & MU -->|findings| F
+  D & RV & AD & MU -->|clean| PR[5 PR, honest body,<br/>assigned to human]
+  PR --> HM{Human + senior<br/>Code Owner approve}
+  HM --> M[main] --> REL[Release: human,<br/>flags / canary / revert]
+  REL -->|defect escapes| ED[escaped-defect label] --> L[Learning loop PR:<br/>test + eval + lesson] --> CTX[(context/)]
+  CTX --> P
 ```
 
-## Multi-agent orchestrator (`agents/orchestrator.ts`)
+## Agents
 
-```
-lead (sonnet, no edit tools)
- ├─ planner     (sonnet, read-only)      → Markdown plan + acceptance criteria
- ├─ implementer (sonnet, edit + npm)     → test-first changes      ◄─┐
- └─ reviewer    (opus,   read + git diff)→ JSON verdict ─ changes ───┘  (max 3 rounds)
-```
+| Agent | Stage | Model | Tools | Output |
+|---|---|---|---|---|
+| `intake` | 1 | haiku | read issue | JSON: ready, missing, question, risk hint, confidence |
+| `planner` | 2 | sonnet | read-only | Markdown plan: intent, risk tier, files, red test, criteria → tests, assumptions, confidence |
+| `implementer` | 3 | sonnet | edit + test commands | red test output, results, not tested, assumptions, confidence |
+| `reviewer` | 4 | opus | read + git diff + npm audit | JSON verdict: approve / changes_requested / escalate |
+| `adversary` | 4 | opus | read + write only `test/adversarial/` | JSON: broke_it, failing cases, intent gaps, out-of-scope changes |
 
-- Subagents live in `.claude/agents/*.md`, so the same definitions work interactively in Claude Code and from the SDK.
-- Handoffs use fixed formats (Markdown plan, JSON verdict, JSON outcome validated with zod).
-- Isolation: run each orchestration in its own `git worktree` so parallel runs never edit the same files.
-- Limits: `maxTurns: 60`, `maxBudgetUsd: 3`, 3 review rounds, then `gave_up` → a human takes over.
+Definitions live in `.claude/agents/*.md` and are shared by Claude Code, the Agent SDK
+orchestrator (`agents/orchestrator.ts`) and the CI prompts, so there is one source of truth.
+
+## Shared context (`context/`)
+
+Rules, service map, API contracts, risk tiers and lessons. Agents read it before planning; only
+humans change rules and risk tiers. In an organization this is a separate repo checked out by
+every workflow.
 
 ## Trust boundaries
 
 | Input | Trusted? | Control |
 |---|---|---|
-| Issue / PR text from anyone | No | Triage agent has zero tools; CI agents get narrow `--allowedTools`; prompts say "untrusted data" |
-| `@claude` comment | Only from OWNER/MEMBER/COLLABORATOR | `author_association` check in `claude.yml` |
-| Agent file edits | Partially | `protect-paths.sh` hook blocks workflows, settings, hooks, CODEOWNERS |
-| Agent shell commands | Partially | `.claude/settings.json` allow/deny rules; no `curl`, no force-push, no push to main |
-| Merge to `main` | Human only | Ruleset: PR + 1 approval + required checks; CODEOWNERS on sensitive paths |
-| Release | Human only | Draft release + `release` environment with required reviewers |
+| Issue / PR text from anyone | No | Intake agent can only read, label, comment; prompts say "untrusted data"; injection cases in evals |
+| `@claude` comment | Only from OWNER/MEMBER/COLLABORATOR, only on `ready` issues | `author_association` + label checks in `claude.yml` |
+| Agent file edits | Partially | `protect-paths.sh` blocks workflows, settings, hooks, agent prompts, CODEOWNERS, rules, risk tiers |
+| Agent shell commands | Partially | allow lists per workflow; deny list blocks merge, release, `gh api`, secrets, `curl` |
+| Merge to `main` | Human only | Ruleset: PR + approval + Code Owner + required checks |
+| Release | Human only | Draft release + `release` environment approval |
 
 ## Failure modes and responses
 
 | Failure | Detection | Response |
 |---|---|---|
-| Prompt injection changes labels | `evals/cases.json` critical cases | CI fails the PR |
-| Agent output not valid JSON | zod parse | Retry once, then throw |
-| Agent loops / runs long | `maxTurns`, `maxBudgetUsd`, job `timeout-minutes` | Run stops; result subtype logged |
-| Reviewer and implementer never agree | review round counter | `gave_up`, human picks up |
-| Cost creep | `runs/runs.jsonl` + `npm run report` | Route cheap jobs to haiku, tighten turns |
+| Vague ticket | Intake gate | Ask the reporter; no agent work starts |
+| Fix doesn't address the real bug | Red-green check: new tests must fail on base | PR blocked |
+| Fix passes its own tests but breaks edge cases | Adversary agent, property tests | Findings sent back to the implementer |
+| Tests too weak to catch a wrong change | Mutation testing (break at 80%) | PR blocked for high risk |
+| Change in money / auth / deletion code | Risk tier `high` | Senior Code Owner approval + stricter checks |
+| Prompt injection | Eval critical cases | CI fails |
+| Agent unsure | Confidence field | Escalate to a human |
+| Defect reaches main | `escaped-defect` label | Learning loop: test + eval + lesson |
+| Agent loops or runs long | `--max-turns`, `maxBudgetUsd`, job timeouts | Run stops; deterministic work moved into scripts |
