@@ -5,3 +5,8 @@ runs/
 /release-notes.md
 .DS_Store
 /drift-report.md
+.claude/settings.local.json
+reports/
+.stryker-tmp/
+test/adversarial/
+pr-body.md

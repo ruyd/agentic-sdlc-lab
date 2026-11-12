@@ -1,0 +1,23 @@
+{
+  "$comment": "First matching tier wins (high before medium before low). Globs use * (one segment) and ** (any depth).",
+  "tiers": [
+    {
+      "name": "high",
+      "reason": "money calculations, guardrails, auth or data deletion",
+      "paths": ["src/invoice.ts", "src/**/payment*", "src/**/auth*", "src/**/delete*", ".github/**", ".claude/**", "context/risk-tiers.json"],
+      "requires": ["senior review (CODEOWNERS)", "adversarial review", "mutation score >= 80%", "property tests pass"]
+    },
+    {
+      "name": "medium",
+      "reason": "agent behaviour and evals",
+      "paths": ["agents/**", "evals/**", "scripts/**"],
+      "requires": ["evals pass", "adversarial review"]
+    },
+    {
+      "name": "low",
+      "reason": "docs, tests only, context",
+      "paths": ["**"],
+      "requires": ["standard review"]
+    }
+  ]
+}
