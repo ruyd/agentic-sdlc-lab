@@ -28,6 +28,7 @@ describe("computeTotals", () => {
   it("rejects out-of-range line discounts", () => {
     expect(() => computeTotals([{ ...lines[0]!, discountPercent: -1 }], 0)).toThrow(RangeError);
     expect(() => computeTotals([{ ...lines[0]!, discountPercent: 101 }], 0)).toThrow(RangeError);
+    expect(() => computeTotals([{ ...lines[0]!, discountPercent: 101 }], 0)).toThrow(/between 0 and 100 on "Consulting"/);
   });
 
   it("accepts line discount boundaries 0 and 100", () => {
@@ -48,7 +49,7 @@ describe("computeTotals", () => {
   // Added after mutation testing showed these boundaries were unpinned.
   it("accepts the discount boundaries 0 and 100", () => {
     expect(computeTotals(lines, 0.1, 0).discountCents).toBe(0);
-    expect(computeTotals(lines, 0.1, 100)).toEqual({ subtotalCents: 22_500, discountCents: 22_500, taxCents: 0, totalCents: 0 });
+    expect(computeTotals(lines, 0.1, 100)).toEqual({ subtotalCents: 22_500, lineDiscountCents: 0, discountCents: 22_500, taxCents: 0, totalCents: 0 });
   });
 
   it("accepts the tax boundaries 0 and 1", () => {
@@ -57,9 +58,9 @@ describe("computeTotals", () => {
   });
 
   it("names the bad argument in the error", () => {
-    expect(() => computeTotals(lines, -0.1)).toThrow(/taxRate must be between 0 and 1/);
-    expect(() => computeTotals(lines, 0.1, -1)).toThrow(/discountPercent must be between 0 and 100/);
-    expect(() => computeTotals(lines, 0.1, 101)).toThrow(/discountPercent must be between 0 and 100/);
+    expect(() => computeTotals(lines, -0.1)).toThrow(/taxRate must be a finite number between 0 and 1/);
+    expect(() => computeTotals(lines, 0.1, -1)).toThrow(/discountPercent must be a finite number between 0 and 100/);
+    expect(() => computeTotals(lines, 0.1, 101)).toThrow(/discountPercent must be a finite number between 0 and 100/);
   });
 
   it("handles an empty invoice", () => {
