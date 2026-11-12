@@ -1,0 +1,7 @@
+{
+  "$comment": "Copy to .claude/settings.local.json (gitignored) to sandbox Bash locally: file writes stay in this folder and network is limited. CI does not need it: each run is a fresh, throwaway GitHub runner with least-privilege permissions.",
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false
+  }
+}

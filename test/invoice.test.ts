@@ -45,6 +45,23 @@ describe("computeTotals", () => {
     expect(() => computeTotals(lines, Infinity)).toThrow(RangeError);
   });
 
+  // Added after mutation testing showed these boundaries were unpinned.
+  it("accepts the discount boundaries 0 and 100", () => {
+    expect(computeTotals(lines, 0.1, 0).discountCents).toBe(0);
+    expect(computeTotals(lines, 0.1, 100)).toEqual({ subtotalCents: 22_500, discountCents: 22_500, taxCents: 0, totalCents: 0 });
+  });
+
+  it("accepts the tax boundaries 0 and 1", () => {
+    expect(computeTotals(lines, 0).taxCents).toBe(0);
+    expect(computeTotals(lines, 1).taxCents).toBe(22_500);
+  });
+
+  it("names the bad argument in the error", () => {
+    expect(() => computeTotals(lines, -0.1)).toThrow(/taxRate must be between 0 and 1/);
+    expect(() => computeTotals(lines, 0.1, -1)).toThrow(/discountPercent must be between 0 and 100/);
+    expect(() => computeTotals(lines, 0.1, 101)).toThrow(/discountPercent must be between 0 and 100/);
+  });
+
   it("handles an empty invoice", () => {
     expect(computeTotals([], 0.2).totalCents).toBe(0);
   });

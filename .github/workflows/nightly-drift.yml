@@ -1,4 +1,5 @@
-# Nightly "operate" agent: finds docs/dependency drift and opens at most one issue.
+# Nightly "operate" agent. The checks are deterministic (scripts/drift-facts.ts); the agent only
+# turns the report into at most one issue, so it needs ~3 turns and never explores the repo.
 name: Nightly drift check
 on:
   schedule:
@@ -17,18 +18,25 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      - uses: anthropics/claude-code-action@v1
+      - name: Collect drift facts
+        id: facts
+        run: npx tsx scripts/drift-facts.ts
+      - name: Report drift
+        # No drift → no agent run, no tokens.
+        if: steps.facts.outputs.drift_count != '0'
+        uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
-            Check this repo for drift:
-            1. Commands in README.md and CLAUDE.md that no longer exist in package.json scripts.
-            2. `npm outdated` results with a major version behind.
-            3. Files referenced in docs/ that no longer exist.
-            First run `gh issue list --label drift --state open`. If an open drift issue exists, add a comment
-            only if something new was found. Otherwise, if drift was found, open ONE issue labeled `drift`
-            with a checklist. If nothing drifted, do nothing.
+            scripts/drift-facts.ts found ${{ steps.facts.outputs.drift_count }} drift item(s); the full report is drift-report.md.
+            Do not investigate the repo; the report is the source of truth. Steps:
+            1. Read drift-report.md.
+            2. Run `gh issue list --label drift --state open --json number,title,body`.
+            3. If an open drift issue exists: if the report lists items that issue does not, run
+               `gh issue comment <number> --body-file drift-report.md`; otherwise do nothing.
+            4. If none exists: run `gh issue create --label drift --title "Drift: <short summary>" --body-file drift-report.md`.
+            Stop after that.
           claude_args: >-
             --max-turns 15
             --model haiku
-            --allowedTools "Read,Grep,Glob,Bash(npm outdated:*),Bash(gh issue list:*),Bash(gh issue create:*),Bash(gh issue comment:*)"
+            --allowedTools "Read,Bash(gh issue list:*),Bash(gh issue create:*),Bash(gh issue comment:*)"

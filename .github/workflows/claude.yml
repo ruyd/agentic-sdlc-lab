@@ -1,25 +1,37 @@
-# "@claude" in an issue or PR comment: Claude implements or answers, and opens a PR.
-# Only trusted users (owner, members, collaborators) can trigger it.
-name: Claude (@claude)
+# Stages 2-3-5: "@claude" on a READY issue → plan (from context/), fix test-first, open an honest PR
+# assigned to a human. On a PR, "@claude" addresses review feedback. Agents never merge or release.
+name: "2-3 · Plan and fix (@claude)"
 on:
   issue_comment:
     types: [created]
   pull_request_review_comment:
     types: [created]
-  issues:
-    types: [opened, assigned]
 jobs:
+  gate:
+    # @claude on an issue that has not passed intake: explain instead of running.
+    if: |
+      github.event_name == 'issue_comment'
+      && !github.event.issue.pull_request
+      && contains(github.event.comment.body, '@claude')
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      && !contains(github.event.issue.labels.*.name, 'ready')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - run: |
+          gh issue comment ${{ github.event.issue.number }} -R ${{ github.repository }} --body \
+            "Intake gate: this issue is not labeled \`ready\` yet. Add the missing details the intake comment asked for (or a maintainer adds \`ready\`), then mention @claude again."
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   claude:
     if: |
-      (
-        (github.event_name == 'issue_comment' || github.event_name == 'pull_request_review_comment')
-        && contains(github.event.comment.body, '@claude')
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-      ) || (
-        github.event_name == 'issues'
-        && contains(github.event.issue.body, '@claude')
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)
-      )
+      contains(github.event.comment.body, '@claude')
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      && (github.event_name == 'pull_request_review_comment'
+          || github.event.issue.pull_request
+          || contains(github.event.issue.labels.*.name, 'ready'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -29,13 +41,17 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
-        with: { fetch-depth: 1 }
+        with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The pipeline itself (plan from context/, red test first, honest PR) is defined in CLAUDE.md.
           claude_args: >-
-            --max-turns 30
-            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(npm test:*),Bash(npm run typecheck),Bash(git status),Bash(git diff:*)"
+            --max-turns 40
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(npm test:*),Bash(npm run typecheck),Bash(npm run test:property),Bash(npx vitest run:*),Bash(npx tsx scripts/risk-tier.ts:*),Bash(git status),Bash(git diff:*),Bash(git log:*),Bash(gh pr create:*),Bash(gh issue view:*)"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: { name: audit-log, path: runs/, if-no-files-found: ignore }

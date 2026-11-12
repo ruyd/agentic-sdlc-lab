@@ -1,74 +1,75 @@
 # agentic-sdlc-lab
 
-Claude agents taking part in every stage of the software lifecycle (plan, build, review, release,
-operate) with guardrails, evals and a multi-agent orchestrator. Built only with free GitHub features,
-Claude Code and the Claude Agent SDK.
+Claude agents taking part in the whole delivery pipeline (intake, plan, fix, review, PR) with
+guardrails, a self-improvement layer and metrics. Built only with free GitHub features, Claude Code
+and the Claude Agent SDK.
 
-**The product** is deliberately tiny (`src/invoice.ts`, invoice totals) so the interesting part is the
-process around it.
+**The product** is deliberately tiny (`src/invoice.ts`, invoice totals in integer cents) so the
+interesting part is the process around it. It is money code, so it sits in the **high** risk tier.
 
-## What the agents do and what humans still decide
+## The pipeline
 
-| Stage | Agent | Human |
-|---|---|---|
-| Plan | Labels new issues, asks for missing info (`triage.yml`) | Prioritizes on the Projects board |
-| Build | `@claude` on an issue opens a PR; local orchestrator plans → implements → reviews | Decides what is OK for an agent |
-| Review | First-pass review against `CLAUDE.md` (`claude-review.yml`); evals gate agent changes | Approves and merges |
-| Release | Drafts release notes on tag (`release-notes.yml`) | Approves the environment, publishes |
-| Operate | Nightly drift check opens at most one issue | Triages it |
+| Stage | What happens | Where | Human |
+|---|---|---|---|
+| 1. Intake gate | Bugs need repro steps, expected vs actual, version; features need a user story and acceptance criteria. Missing → the agent asks the reporter, never guesses. Ready → `ready` label | `intake.yml`, `.claude/agents/intake.md` | Answers questions |
+| 2. Plan | Reads `context/` (rules, service map, API spec, lessons, risk tiers), locates the code, writes a plan with a red test | `@claude` on a `ready` issue, `planner` agent | Can stop it |
+| 3. Fix | Failing test first, then the fix; iterates until unit, property and type checks are green on a throwaway runner | `claude.yml`, `implementer` agent | – |
+| 4. Review | Deterministic gates (risk tier, red-green, honest PR body, `npm audit`), reviewer agent (diff vs plan, rules, security), adversarial agent (tries to break it), mutation testing for high risk | `claude-review.yml`, `reviewer` + `adversary` agents, CodeQL | – |
+| 5. PR | Opened with plan, evidence, what was and wasn't tested, assumptions; assigned to a human | `gh pr create --assignee` | Approves, merges |
+| Release | Draft release notes behind an environment approval | `release-notes.yml` | Publishes, monitors, reverts |
+| Learn | `escaped-defect` label → regression test + eval case + lesson, as a PR | `learning-loop.yml` | Merges, applies proposed agent changes |
+| Measure | Merge rate, rework, escaped defects, reverts, risk mix | `metrics.yml`, `npm run metrics` | Decides what to improve |
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for diagrams and trust boundaries and
-[docs/adr/0001-agent-guardrails.md](docs/adr/0001-agent-guardrails.md) for why.
+Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/release.md](docs/release.md),
+[docs/adr/0001-agent-guardrails.md](docs/adr/0001-agent-guardrails.md).
+
+## Self-improvement layer
+
+1. **Tests that pin down the change:** `scripts/red-green.sh` fails the PR if its new tests also pass on the base commit.
+2. **Adversarial reviewer:** a separate agent with fresh context writes edge-case tests (nulls, boundaries, NaN, rounding, locales), compares the fix to the ticket's intent and flags out-of-scope changes.
+3. **Stronger checks:** property tests with fast-check (`test/invoice.property.test.ts`) and mutation testing with Stryker (break threshold 80%; currently 100%).
+4. **Risk tiers:** `context/risk-tiers.json` marks money, auth, data deletion and guardrail paths as high risk: senior Code Owner approval, adversarial review and mutation testing are required.
+5. **Honest PR:** `scripts/check-pr-body.ts` fails the PR unless it states what was tested, what wasn't, assumptions, risk tier and evidence.
+6. **After merge:** release stays human, behind feature flags or a canary, with a one-command revert ([docs/release.md](docs/release.md)).
+7. **Learning loop:** every escaped defect becomes a regression test, an eval case if an agent missed it, and a row in `context/lessons.md` that every planner reads.
 
 ## Run it locally
 
 ```bash
 npm install
-npm test
-npm run typecheck
-npm run triage -- "totals broken" "it doesnt work"      # one agent call (haiku)
-npm run evals                                             # golden set incl. prompt-injection cases
-npm run orchestrate -- "Add a per-line discount field to InvoiceLine"   # multi-agent; use a worktree
-npm run report                                            # cost / turns / latency per agent
-./scripts/batch-triage.sh                                 # headless `claude -p` over open issues
+npm test                    # unit + property tests
+npm run mutation            # Stryker mutation score
+npm run risk-tier           # risk tier of your diff
+npm run red-green           # do your new tests fail on main?
+npm run evals               # agent evals incl. prompt-injection cases (calls Claude)
+npm run metrics             # merge rate, rework, escaped defects
+npm run orchestrate -- "Bug: computeTotals ... Steps: ... Expected: ... Actual: ..."   # full pipeline; use a worktree
+./scripts/batch-triage.sh   # headless `claude -p` intake over open issues
 ```
 
-Auth: your local Claude Code login works; CI uses the `CLAUDE_CODE_OAUTH_TOKEN` secret
-(from `claude setup-token`) — or swap in `anthropic_api_key` / `ANTHROPIC_API_KEY`.
+In Claude Code: `/intake <issue>` checks a ticket, `/fix <issue>` runs the whole pipeline locally,
+`/release-notes` drafts notes. Copy `.claude/settings.local.example.json` to `.claude/settings.local.json`
+to sandbox Bash locally.
 
-## Claude Code setup in this repo
+Auth: your local Claude Code login works; CI uses the `CLAUDE_CODE_OAUTH_TOKEN` secret.
 
-- `CLAUDE.md` — project rules and Definition of Done, read by every agent
-- `.claude/settings.json` — permission allow/deny rules and hooks
-- `.claude/hooks/protect-paths.sh` — blocks agent edits to workflows, settings, hooks, CODEOWNERS
-- `.claude/hooks/post-edit-check.sh` — typechecks after each edit so errors go straight back to Claude
-- `.claude/agents/` — `planner`, `implementer`, `reviewer` subagents (shared by Claude Code and the SDK)
-- `.claude/commands/` — `/triage <n>`, `/release-notes`
+## Guardrails
 
-## Working loop (how I pair with Claude)
-
-1. Issue with a user story and acceptance criteria (issue form)
-2. Plan mode in Claude Code, or the `planner` subagent
-3. Failing test first, then implementation
-4. `reviewer` subagent locally, then `claude-review.yml` on the PR
-5. Human review and squash merge with a Conventional Commit title
+- **Least privilege:** every workflow lists its exact `--allowedTools` and GitHub `permissions:`; the intake agent can only read, label and comment.
+- **Sandboxed:** CI agents run on throwaway GitHub runners; locally, run in a git worktree with the Claude Code sandbox on.
+- **Agents never merge or release:** denied in `.claude/settings.json`, not in any allow list, and blocked by the `main` ruleset.
+- **Agents cannot change their guardrails:** a hook blocks edits to workflows, settings, hooks, agent prompts, CODEOWNERS, `context/rules.md` and `context/risk-tiers.json`.
+- **Audit log:** a hook appends every tool call to `runs/audit.jsonl`; CI uploads it as an artifact.
+- **Escalation:** every agent reports a confidence; low confidence or a rules conflict stops the pipeline and asks a human.
 
 ## GitHub setup checklist
 
-- [ ] Push as a **public** repo (unlimited Actions minutes, CodeQL, environment reviewers)
-- [ ] Add secret `CLAUDE_CODE_OAUTH_TOKEN`; install the Claude GitHub app (`/install-github-app` in Claude Code)
-- [ ] Ruleset on `main`: require PR, 1 approval, Code Owner review, status checks `test` and `analyze`; block force pushes
-- [ ] Environment `release` with yourself as required reviewer
-- [ ] Labels: `bug, enhancement, documentation, question, good first issue, needs-info, security, drift`
-- [ ] Projects board with Status, Iteration (1 week) and Size fields
-- [ ] Turn on Dependabot alerts, secret scanning and push protection
+- [x] Public repo, `CLAUDE_CODE_OAUTH_TOKEN` secret, Claude GitHub App
+- [x] Ruleset on `main`: PR, 1 approval, Code Owner review, required checks `test`, `analyze` and `gates`
+- [x] `release` environment with a required reviewer
+- [x] Labels: `ready`, `needs-info`, `risk:high`, `risk:medium`, `risk:low`, `escaped-defect`, `no-red-test`
 
 ## Metrics
 
-| Metric | Value |
-|---|---|
-| Agent PRs merged | – |
-| Approved on first human review | – |
-| Avg review rounds (orchestrator) | – |
-| Eval pass rate | – |
-| Single vs multi-agent, same task (time / $) | – |
+Run `npm run metrics` or the **Measure · Pipeline metrics** workflow. Last 30 days at the time of writing:
+3 agent PRs, merge rate 100% (2/2), rework 67% (2/3), 0 escaped defects, 0 reverts.

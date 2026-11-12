@@ -9,7 +9,12 @@
     "evals": "tsx evals/run-evals.ts",
     "orchestrate": "tsx agents/orchestrator.ts",
     "triage": "tsx agents/triage.ts",
-    "report": "tsx scripts/report.ts"
+    "report": "tsx scripts/report.ts",
+    "test:property": "vitest run test/invoice.property.test.ts",
+    "mutation": "stryker run",
+    "risk-tier": "tsx scripts/risk-tier.ts",
+    "red-green": "scripts/red-green.sh",
+    "metrics": "tsx scripts/metrics.ts"
   },
   "license": "MIT",
   "type": "module",
@@ -18,7 +23,10 @@
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/vitest-runner": "^10.1.1",
     "@types/node": "^26.6.6",
+    "fast-check": "^4.10.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.1.0"
