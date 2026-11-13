@@ -25,13 +25,16 @@ jobs:
       - run: |
           resume="Then a maintainer adds \`ready\` and mentions @claude again."
           # Fail loudly rather than fall back to the wrong reply if the labels did not arrive as a JSON array.
-          jq -e 'type == "array"' <<<"${LABELS:-}" >/dev/null || { echo "::error::LABELS is not a JSON array"; exit 1; }
+          jq -s -e 'length == 1 and (.[0] | type == "array" and all(.[]; type == "string"))' <<<"${LABELS:-}" >/dev/null \
+            || { echo "::error::LABELS is not a JSON array of strings"; exit 1; }
           # Case-insensitive, like the job's `contains(...)` check.
           has() { jq -e --arg l "$1" 'map(ascii_downcase) | index($l) != null' <<<"$LABELS" >/dev/null; }
           # `security` is ambiguous: the scan adds it for a pasted secret, the intake agent for a vulnerability report.
           secret_note="If a secret was posted, rotate it now and delete the text: \`scan-cleared\` does not override a secret."
           if has prompt-injection && has security; then
-            msg="@claude did not run: text in this thread was flagged, and the issue is marked \`security\`. $secret_note Otherwise edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. $resume"
+            msg="@claude did not run: text in this thread was flagged, and the issue is marked \`security\`. $secret_note Otherwise edit the flagged text"
+            if has scan-cleared; then msg="$msg."; else msg="$msg, or a maintainer adds \`scan-cleared\` if it is a false positive."; fi
+            msg="$msg $resume"
           elif has prompt-injection && has scan-cleared; then
             msg="@claude did not run: the flag on this thread was cleared, but the issue is not labeled \`ready\`. $resume"
           elif has prompt-injection; then

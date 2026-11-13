@@ -72,6 +72,7 @@ describe("@claude gate reply", () => {
     const r = reply(["prompt-injection", "security", "scan-cleared"]);
     expect(r).not.toContain("was cleared");
     expect(r).toContain("does not override a secret");
+    expect(r).not.toMatch(/maintainer adds `scan-cleared`/);
   });
 
   it("matches labels case-insensitively, like the job's if: check", () => {
@@ -80,7 +81,7 @@ describe("@claude gate reply", () => {
   });
 
   it("fails instead of giving the readiness reply when LABELS is missing or not a JSON array", () => {
-    for (const bad of ["prompt-injection,security", undefined, "null"]) {
+    for (const bad of ["prompt-injection,security", undefined, "null", '[null,"prompt-injection"]', '["prompt-injection"] []']) {
       expect(() => reply(bad)).toThrow();
     }
   });
