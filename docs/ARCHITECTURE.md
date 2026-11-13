@@ -45,7 +45,7 @@ every workflow.
 
 | Input | Trusted? | Control |
 |---|---|---|
-| Issue / PR text from anyone | No | Intake agent can only read, label, comment; prompts say "untrusted data"; injection cases in evals |
+| Issue / PR text from anyone (titles, bodies, comments, reviews) | No | 1) Deterministic input scan before any agent reads it: injection phrases, fake system turns, hidden text (HTML comments, base64, Unicode tags, bidi, zero-width), exfiltration and pasted secrets. Findings pause agents and label `prompt-injection`; a maintainer may add `scan-cleared` (never for secrets; removed when the text is edited). 2) Intake agent judges paraphrased injection and vulnerabilities. 3) Agents can only read, label, comment; evals pin both layers |
 | `@claude` comment | Only from OWNER/MEMBER/COLLABORATOR, only on `ready` issues | `author_association` + label checks in `claude.yml` |
 | Agent file edits | Partially | `protect-paths.sh` blocks workflows, settings, hooks, agent prompts, CODEOWNERS, rules, risk tiers |
 | Agent shell commands | Partially | allow lists per workflow; deny list blocks merge, release, `gh api`, secrets, `curl` |
@@ -61,7 +61,8 @@ every workflow.
 | Fix passes its own tests but breaks edge cases | Adversary agent, property tests | Findings sent back to the implementer |
 | Tests too weak to catch a wrong change | Mutation testing (break at 80%) | PR blocked for high risk |
 | Change in money / auth / deletion code | Risk tier `high` | Senior Code Owner approval + stricter checks |
-| Prompt injection | Eval critical cases | CI fails |
+| Prompt injection | Input scan (intake, `@claude`, PR `gates`) + intake agent + eval critical cases | Agents paused; `gates` fails; maintainer reviews |
+| Secret pasted in an issue or PR | Input scan `secret` rule | Labeled `security`; reporter told to rotate; cannot be cleared |
 | Agent unsure | Confidence field | Escalate to a human |
 | Defect reaches main | `escaped-defect` label | Learning loop: test + eval + lesson |
 | Agent loops or runs long | `--max-turns`, `maxBudgetUsd`, job timeouts | Run stops; deterministic work moved into scripts |

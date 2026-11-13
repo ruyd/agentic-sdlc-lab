@@ -25,13 +25,43 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-  claude:
+  scan:
+    # Input scan of everything @claude would read: title, body, comments, reviews (scripts/scan-untrusted.ts).
     if: |
       contains(github.event.comment.body, '@claude')
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
       && (github.event_name == 'pull_request_review_comment'
           || github.event.issue.pull_request
           || contains(github.event.issue.labels.*.name, 'ready'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      blocked: ${{ steps.scan.outputs.blocked }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
+      NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - id: scan
+        run: npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM"
+      - name: Explain why @claude did not run
+        if: steps.scan.outputs.blocked == 'true'
+        run: |
+          gh "$KIND" edit "$NUM" --add-label prompt-injection
+          { echo "@claude did not run."; echo; cat runs/scan-report.md; } > runs/claude-blocked.md
+          gh "$KIND" comment "$NUM" --body-file runs/claude-blocked.md
+
+  claude:
+    needs: scan
+    if: needs.scan.outputs.blocked == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
