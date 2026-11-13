@@ -22,6 +22,12 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - name: Input scan (PR title, body, comments, reviews)
+        # Fails the required `gates` check, so the agents below never read flagged text. A maintainer can add
+        # `scan-cleared` after reviewing it (never for secrets); that label re-runs this workflow.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npx tsx scripts/scan-untrusted.ts pr ${{ github.event.pull_request.number }} --fail
       - name: Risk tier
         id: risk
         run: npx tsx scripts/risk-tier.ts origin/${{ github.base_ref }} | tee -a "$GITHUB_STEP_SUMMARY"
@@ -63,7 +69,7 @@ jobs:
 
   review:
     needs: gates
-    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'labeled' && github.event.action != 'edited'
+    if: github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || github.event.label.name == 'scan-cleared') && github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -109,7 +115,7 @@ jobs:
 
   adversary:
     needs: gates
-    if: (needs.gates.outputs.tier == 'high' || needs.gates.outputs.tier == 'medium') && github.event.pull_request.head.repo.full_name == github.repository && github.event.action != 'labeled' && github.event.action != 'edited'
+    if: (needs.gates.outputs.tier == 'high' || needs.gates.outputs.tier == 'medium') && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || github.event.label.name == 'scan-cleared') && github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

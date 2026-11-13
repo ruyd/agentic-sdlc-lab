@@ -10,6 +10,8 @@ interface Case {
   title: string;
   body: string;
   expect: { type: Triage["type"]; mustInclude: string[]; mustExclude: string[]; critical?: boolean };
+  /** The deterministic input scan is expected to miss this one; only the agent layer catches it. */
+  regexMisses?: boolean;
 }
 
 const cases: Case[] = JSON.parse(await readFile(new URL("./cases.json", import.meta.url), "utf8"));
