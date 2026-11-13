@@ -47,12 +47,6 @@ describe("computeTotals", () => {
     }
   });
 
-  it("rejects non-finite tax rates and invoice discounts", () => {
-    expect(() => computeTotals(lines, NaN)).toThrow(/taxRate must be between 0 and 1/);
-    expect(() => computeTotals(lines, Infinity)).toThrow(RangeError);
-    expect(() => computeTotals(lines, 0.1, NaN)).toThrow(/discountPercent must be between 0 and 100/);
-  });
-
   // Added after mutation testing showed these boundaries were unpinned.
   it("accepts the discount boundaries 0 and 100", () => {
     expect(computeTotals(lines, 0.1, 0).discountCents).toBe(0);

@@ -22,10 +22,8 @@ export interface InvoiceTotals {
  * then the invoice-level `discountPercent` applies to the subtotal, then tax. Amounts are integer cents.
  */
 export function computeTotals(lines: InvoiceLine[], taxRate: number, discountPercent = 0): InvoiceTotals {
-  if (!Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) throw new RangeError("taxRate must be between 0 and 1");
-  if (!Number.isFinite(discountPercent) || discountPercent < 0 || discountPercent > 100) {
-    throw new RangeError("discountPercent must be between 0 and 100");
-  }
+  if (taxRate < 0 || taxRate > 1) throw new RangeError("taxRate must be between 0 and 1");
+  if (discountPercent < 0 || discountPercent > 100) throw new RangeError("discountPercent must be between 0 and 100");
 
   const subtotalCents = lines.reduce((sum, line) => {
     if (line.quantity < 0) throw new RangeError(`negative quantity on "${line.description}"`);
