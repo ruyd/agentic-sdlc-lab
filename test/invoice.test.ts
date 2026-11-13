@@ -15,6 +15,13 @@ describe("computeTotals", () => {
     expect(computeTotals(lines, 0.1, 10)).toEqual({ subtotalCents: 22_500, discountCents: 2_250, taxCents: 2_025, totalCents: 22_275 });
   });
 
+  it("rejects non-finite tax rates and discounts", () => {
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(() => computeTotals(lines, bad)).toThrow(/taxRate must be between 0 and 1/);
+      expect(() => computeTotals(lines, 0.1, bad)).toThrow(/discountPercent must be between 0 and 100/);
+    }
+  });
+
   // Added after mutation testing showed these boundaries were unpinned.
   it("accepts the discount boundaries 0 and 100", () => {
     expect(computeTotals(lines, 0.1, 0).discountCents).toBe(0);
