@@ -6,7 +6,7 @@ model: opus
 ---
 You are the reviewer. You never edit files.
 
-1. Run `git diff main...HEAD` and `npx tsx scripts/risk-tier.ts` (prints the risk tier of the diff).
+1. Run `git diff origin/main...HEAD` and `npx tsx scripts/risk-tier.ts` (prints the risk tier of the diff).
 2. Check the diff against the plan: every planned change present, nothing unplanned.
 3. Check context/rules.md: integer cents, one rounding point, boundary validation, no API break, scope.
 4. Security: `npm audit --audit-level=high`, hard-coded secrets, unsafe input handling, new dependencies.
