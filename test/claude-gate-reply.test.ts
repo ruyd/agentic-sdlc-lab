@@ -24,7 +24,7 @@ function reply(labels: string[]): string {
   writeFileSync(gh, `#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = "--body" ] && printf '%s' "$2" > "${out}"; shift; done\n`);
   chmodSync(gh, 0o755);
   execFileSync("bash", ["-e", "-c", gateScript()], {
-    env: { PATH: `${dir}:${process.env.PATH}`, NUM: "1", REPO: "o/r", LABELS: labels.join(",") },
+    env: { PATH: `${dir}:${process.env.PATH}`, NUM: "1", REPO: "o/r", LABELS: JSON.stringify(labels) },
   });
   return readFileSync(out, "utf8");
 }
@@ -62,6 +62,7 @@ describe("@claude gate reply", () => {
   it("sends a security issue that is not ready to private reporting, not to missing details", () => {
     const r = reply(["bug", "security"]);
     expect(r).toContain("private report");
+    expect(r).toContain("rotate it even if the text was deleted");
     expect(r).not.toContain("missing details");
   });
 
@@ -76,6 +77,14 @@ describe("@claude gate reply", () => {
     expect(r).toContain("was cleared");
     expect(r).not.toMatch(/maintainer adds `scan-cleared`/);
     expect(r).toContain("adds `ready` and mentions @claude again");
+  });
+
+  it("does not split a label whose name contains a comma", () => {
+    expect(reply(["wontfix,prompt-injection"])).toContain("Add the missing details");
+  });
+
+  it("handles quoted or shell-like label names without expanding them", () => {
+    expect(reply(['"$(touch gate-pwned)"', "prompt-injection"])).toContain("flagged as possible prompt injection");
   });
 
   it("matches label names exactly", () => {
