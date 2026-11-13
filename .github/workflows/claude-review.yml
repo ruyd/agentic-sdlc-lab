@@ -97,7 +97,9 @@ jobs:
           claude_args: >-
             --max-turns 15
             --model sonnet
-            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(npm test:*),Bash(npm audit:*),Bash(npx tsx scripts/risk-tier.ts:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Write(runs/review.md),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*),mcp__github_inline_comment__create_inline_comment"
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(npm test:*),Bash(npm audit:*),Bash(npx tsx scripts/risk-tier.ts:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh issue view:*),Write(runs/review.md),Edit(runs/review.md),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*),mcp__github_inline_comment__create_inline_comment"
+      - name: Comment was written
+        run: test -s runs/review.md || { echo "::error::The reviewer did not write runs/review.md, so no review was posted"; exit 1; }
       # The execution log lists every permission denial by tool and input, so they can be fixed, not tolerated.
       - uses: actions/upload-artifact@v7
         if: always() && steps.claude.outputs.execution_file
@@ -138,10 +140,12 @@ jobs:
           claude_args: >-
             --max-turns 20
             --model opus
-            --allowedTools "Read,Grep,Glob,Write(test/adversarial/**),Edit(test/adversarial/**),Bash(npm run test:adversarial:*),Bash(npx vitest run:*),Bash(git diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh issue view:*),Write(runs/adversary.md),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*)"
+            --allowedTools "Read,Grep,Glob,Write(test/adversarial/**),Edit(test/adversarial/**),Bash(npm run test:adversarial:*),Bash(npx vitest run:*),Bash(git diff:*),Bash(gh pr view:*),Bash(gh pr comment:*),Bash(gh issue view:*),Write(runs/adversary.md),Edit(runs/adversary.md),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*)"
       - uses: actions/upload-artifact@v7
         if: always()
         with: { name: adversarial-tests, path: test/adversarial/, if-no-files-found: ignore }
+      - name: Comment was written
+        run: test -s runs/adversary.md || { echo "::error::The adversary did not write runs/adversary.md, so no review was posted"; exit 1; }
       - uses: actions/upload-artifact@v7
         if: always() && steps.claude.outputs.execution_file
         with: { name: adversary-execution, path: "${{ steps.claude.outputs.execution_file }}" }
