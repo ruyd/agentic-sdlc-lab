@@ -1,4 +1,4 @@
-# Stages 2-3-5: "@claude" on a READY issue → plan (from context/), fix test-first, open an honest PR
+# Stages 2-3-5: a line starting with "@claude" on an open READY issue → plan (from context/), fix test-first, open an honest PR
 # assigned to a human. On a PR, "@claude" addresses review feedback. Agents never merge or release.
 name: "2-3 · Plan and fix (@claude)"
 on:
@@ -8,26 +8,79 @@ on:
     types: [created]
 jobs:
   gate:
-    # @claude on an issue that has not passed intake: explain instead of running.
+    # Decides whether @claude runs, in this order:
+    #   1. Is the comment a call to @claude (a line starting with it, on an open issue or PR)?
+    #   2. Input scan of everything @claude would read (scripts/scan-untrusted.ts), so a flag in the
+    #      triggering comment itself counts. The labels are read live, not from the event payload.
+    #   3. Issue not `ready`: explain the real reason. Flagged on a `ready` issue or PR: post the scan report.
     if: |
-      github.event_name == 'issue_comment'
-      && !github.event.issue.pull_request
-      && contains(github.event.comment.body, '@claude')
+      contains(github.event.comment.body, '@claude')
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-      && !contains(github.event.issue.labels.*.name, 'ready')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
+      contents: read
       issues: write
+      pull-requests: write
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
+      NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
     steps:
+      # invocation: only a line that starts with @claude calls it. A passing mention, a quoted reply
+      # ("> @claude") or a comment on a closed issue or PR does not. Tested by test/claude-gate-reply.test.ts.
+      - id: invoke
+        run: |
+          if [ "${STATE:-}" = "closed" ]; then echo "invoked=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if grep -qE '^[[:space:]]*@claude([^[:alnum:]_-]|$)' <<<"${BODY:-}"; then
+            echo "invoked=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "invoked=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          BODY: ${{ github.event.comment.body }}
+          STATE: ${{ github.event.issue.state || github.event.pull_request.state }}
+      - if: steps.invoke.outputs.invoked == 'true'
+        uses: actions/checkout@v7
+      - if: steps.invoke.outputs.invoked == 'true'
+        uses: actions/setup-node@v5
+        with: { node-version: 22, cache: npm }
+      - if: steps.invoke.outputs.invoked == 'true'
+        run: npm ci
+      - id: scan
+        if: steps.invoke.outputs.invoked == 'true'
+        run: npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM"
+      - name: Read labels live and add what the scan just found
+        id: labels
+        if: steps.invoke.outputs.invoked == 'true'
+        run: |
+          json="$(gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name]')"
+          if [ "$BLOCKED" = "true" ]; then json="$(jq -c '. + ["prompt-injection"] | unique' <<<"$json")"; fi
+          if [ "$SECRET" = "true" ]; then json="$(jq -c '. + ["security"] | unique' <<<"$json")"; fi
+          echo "json=$(jq -c . <<<"$json")" >> "$GITHUB_OUTPUT"
+          echo "ready=$(jq -r 'map(ascii_downcase) | index("ready") != null' <<<"$json")" >> "$GITHUB_OUTPUT"
+        env:
+          BLOCKED: ${{ steps.scan.outputs.blocked }}
+          SECRET: ${{ steps.scan.outputs.secret }}
+      - name: Explain why @claude did not run
+        if: steps.scan.outputs.blocked == 'true' && (env.KIND == 'pr' || steps.labels.outputs.ready == 'true')
+        run: |
+          gh "$KIND" edit "$NUM" --add-label prompt-injection
+          { echo "@claude did not run."; echo; cat runs/scan-report.md; } > runs/claude-blocked.md
+          gh "$KIND" comment "$NUM" --body-file runs/claude-blocked.md
       # gate-reply: tell the reporter the real reason @claude did not run and how to resume.
-      # A flag (scan or intake agent) removes `ready`, and clearing the flag does not restore it.
+      # Clearing a flag makes intake check readiness again (intake.yml), so nobody adds `ready` by hand.
       # Tested by test/claude-gate-reply.test.ts, which runs this script against a stub `gh`.
-      - run: |
-          resume="Then a maintainer adds \`ready\` and mentions @claude again."
+      - name: Explain why an issue that is not ready did not run
+        if: env.KIND == 'issue' && steps.labels.outputs.ready == 'false'
+        run: |
+          resume="Once the flag is cleared, intake checks the issue again and adds \`ready\` if it is complete. Then mention @claude again."
           # Fail loudly rather than fall back to the wrong reply if the labels did not arrive as a JSON array.
           jq -s -e 'length == 1 and (.[0] | type == "array" and all(.[]; type == "string"))' <<<"${LABELS:-}" >/dev/null \
             || { echo "::error::LABELS is not a JSON array of strings"; exit 1; }
-          # Case-insensitive, like the job's `contains(...)` check.
+          # Case-insensitive, like GitHub's own label matching.
           has() { jq -e --arg l "$1" 'map(ascii_downcase) | index($l) != null' <<<"$LABELS" >/dev/null; }
           # `security` is ambiguous: the scan adds it for a pasted secret, the intake agent for a vulnerability report.
           secret_note="If a secret was posted, rotate it now and delete the text: \`scan-cleared\` does not override a secret."
@@ -36,7 +89,7 @@ jobs:
             if has scan-cleared; then msg="$msg."; else msg="$msg, or a maintainer adds \`scan-cleared\` if it is a false positive."; fi
             msg="$msg $resume"
           elif has prompt-injection && has scan-cleared; then
-            msg="@claude did not run: the flag on this thread was cleared, but the issue is not labeled \`ready\`. $resume"
+            msg="@claude did not run: the flag on this thread was cleared, and intake is checking the issue again. Once it adds \`ready\`, mention @claude again. If intake asks for details, add them first."
           elif has prompt-injection; then
             msg="@claude did not run: text in this thread was flagged as possible prompt injection. Edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. $resume"
           elif has security; then
@@ -46,48 +99,22 @@ jobs:
           fi
           gh issue comment "$NUM" -R "$REPO" --body "$msg"
         env:
-          GH_TOKEN: ${{ github.token }}
-          NUM: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
-          LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
-
-  scan:
-    # Input scan of everything @claude would read: title, body, comments, reviews (scripts/scan-untrusted.ts).
-    if: |
-      contains(github.event.comment.body, '@claude')
-      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
-      && (github.event_name == 'pull_request_review_comment'
-          || github.event.issue.pull_request
-          || contains(github.event.issue.labels.*.name, 'ready'))
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      issues: write
-      pull-requests: write
-    outputs:
-      blocked: ${{ steps.scan.outputs.blocked }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
-      NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v5
-        with: { node-version: 22, cache: npm }
-      - run: npm ci
-      - id: scan
-        run: npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM"
-      - name: Explain why @claude did not run
-        if: steps.scan.outputs.blocked == 'true'
+          LABELS: ${{ steps.labels.outputs.json }}
+      - id: decide
+        if: always()
         run: |
-          gh "$KIND" edit "$NUM" --add-label prompt-injection
-          { echo "@claude did not run."; echo; cat runs/scan-report.md; } > runs/claude-blocked.md
-          gh "$KIND" comment "$NUM" --body-file runs/claude-blocked.md
+          run=false
+          if [ "$INVOKED" = "true" ] && [ "$BLOCKED" = "false" ] && { [ "$KIND" = "pr" ] || [ "$READY" = "true" ]; }; then run=true; fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+        env:
+          INVOKED: ${{ steps.invoke.outputs.invoked }}
+          BLOCKED: ${{ steps.scan.outputs.blocked }}
+          READY: ${{ steps.labels.outputs.ready }}
 
   claude:
-    needs: scan
-    if: needs.scan.outputs.blocked == 'false'
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

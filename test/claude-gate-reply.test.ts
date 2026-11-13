@@ -1,4 +1,5 @@
-// Runs the `gate` reply script from .github/workflows/claude.yml against a stub `gh` for each label state.
+// Runs scripts from the `gate` job in .github/workflows/claude.yml: the invocation check, and the reply
+// for an issue that is not ready (against a stub `gh`, for each label state).
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,16 +8,61 @@ import { describe, expect, it } from "vitest";
 
 const WORKFLOW = resolve(".github/workflows/claude.yml");
 
-function gateScript(): string {
+// The step after `# <marker>:`: its `run: |` block, up to the step's `env:`.
+function stepScript(marker: string, mustContain: string): string {
   const lines = readFileSync(WORKFLOW, "utf8").split("\n");
-  const marker = lines.findIndex((l) => l.includes("# gate-reply:"));
-  const run = lines.findIndex((l, i) => i > marker && l.trim() === "- run: |");
+  const at = lines.findIndex((l) => l.includes(`# ${marker}:`));
+  const run = lines.findIndex((l, i) => i > at && /^-?\s*run: \|$/.test(l.trim()));
   const end = lines.findIndex((l, i) => i > run && l.trim() === "env:");
-  if (marker < 0 || run < 0 || end < 0) throw new Error("gate reply step not found");
+  if (at < 0 || run < 0 || end < 0) throw new Error(`${marker} step not found`);
   const script = lines.slice(run + 1, end).map((l) => l.replace(/^ {10}/, "")).join("\n");
-  if (!script.includes("gh issue comment")) throw new Error("gate reply step extracted without its gh call");
+  if (!script.includes(mustContain)) throw new Error(`${marker} step extracted without ${mustContain}`);
   return script;
 }
+const gateScript = () => stepScript("gate-reply", "gh issue comment");
+
+function invoked(body: string, state = "open"): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "invoke-"));
+  const out = join(dir, "out");
+  writeFileSync(out, "");
+  execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("invocation", "invoked=")], {
+    env: { PATH: process.env.PATH, BODY: body, STATE: state, GITHUB_OUTPUT: out },
+  });
+  const value = readFileSync(out, "utf8").trim();
+  if (value !== "invoked=true" && value !== "invoked=false") throw new Error(`unexpected output: ${value}`);
+  return value === "invoked=true";
+}
+
+describe("@claude invocation", () => {
+  it("counts a line that starts with @claude", () => {
+    for (const body of ["@claude fix this", "  @claude please", "Thanks!\n@claude go ahead", "Thanks!\r\n@claude go", "@claude", "@claude, plan it"]) {
+      expect(invoked(body), body).toBe(true);
+    }
+  });
+
+  it("ignores passing mentions, quotes, code and look-alike handles", () => {
+    for (const body of ["Test done on an @claude comment. Closing.", "> @claude fix this", "`@claude` is the trigger", "@claudebot hi", "@claude-dev hi", "@claude_x hi", ""]) {
+      expect(invoked(body), body).toBe(false);
+    }
+  });
+
+  it("ignores comments on closed issues and PRs", () => {
+    expect(invoked("@claude fix this", "closed")).toBe(false);
+    expect(invoked("@claude fix this", "")).toBe(true);
+  });
+
+  it("does not run shell in the comment body", () => {
+    const dir = mkdtempSync(join(tmpdir(), "invoke-cwd-"));
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      invoked("@claude $(touch pwned) `touch pwned`");
+      expect(existsSync(join(dir, "pwned"))).toBe(false);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+});
 
 function reply(labels: string[] | string | undefined): string {
   const dir = mkdtempSync(join(tmpdir(), "gate-"));
@@ -40,19 +86,25 @@ describe("@claude gate reply", () => {
     }
   });
 
+  it("never tells a maintainer to add `ready` by hand to get past a flag", () => {
+    for (const labels of [["prompt-injection"], ["prompt-injection", "security"], ["prompt-injection", "scan-cleared"]]) {
+      expect(reply(labels)).not.toMatch(/maintainer adds `ready`/);
+    }
+  });
+
   it("names the flag and offers scan-cleared for a plain flag", () => {
     const r = reply(["bug", "prompt-injection"]);
     expect(r).toContain("flagged as possible prompt injection");
     expect(r).toContain("`scan-cleared`");
     expect(r).not.toContain("missing details");
-    expect(r).toContain("adds `ready` and mentions @claude again");
+    expect(r).toContain("intake checks the issue again and adds `ready`");
   });
 
   it("never offers scan-cleared for a secret without saying it does not apply", () => {
     const r = reply(["prompt-injection", "security"]);
     expect(r).toContain("rotate it now");
     expect(r).toContain("does not override a secret");
-    expect(r).toContain("adds `ready` and mentions @claude again");
+    expect(r).toContain("intake checks the issue again and adds `ready`");
   });
 
   it("does not claim a secret, since `security` may mean a vulnerability report", () => {
@@ -90,7 +142,7 @@ describe("@claude gate reply", () => {
     const r = reply(["prompt-injection", "scan-cleared"]);
     expect(r).toContain("was cleared");
     expect(r).not.toMatch(/maintainer adds `scan-cleared`/);
-    expect(r).toContain("adds `ready` and mentions @claude again");
+    expect(r).toContain("intake is checking the issue again");
   });
 
   it("does not split a label whose name contains a comma", () => {

@@ -14,7 +14,7 @@ interesting part is the process around it. It is money code, so it sits in the *
 | Stage | What happens | Where | Human |
 |---|---|---|---|
 | 1. Intake gate | Input scan of title, body and every comment for prompt injection, hidden text and secrets (findings pause all agents). Bugs need repro steps, expected vs actual, version; features need a user story and acceptance criteria. Missing → the agent asks the reporter, never guesses. Ready → `ready` label | `intake.yml`, `.claude/agents/intake.md` | Answers questions |
-| 2. Plan | Reads `context/` (rules, service map, API spec, lessons, risk tiers), locates the code, writes a plan with a red test | `@claude` on a `ready` issue, `planner` agent | Can stop it |
+| 2. Plan | Reads `context/` (rules, service map, API spec, lessons, risk tiers), locates the code, writes a plan with a red test | A line starting with `@claude` on an open `ready` issue, `planner` agent | Can stop it |
 | 3. Fix | Failing test first, then the fix; iterates until unit, property and type checks are green on a throwaway runner | `claude.yml`, `implementer` agent | – |
 | 4. Review | Deterministic gates (risk tier, red-green, honest PR body, `npm audit`), reviewer agent (diff vs plan, rules, security), adversarial agent (tries to break it), mutation testing for high risk | `claude-review.yml`, `reviewer` + `adversary` agents, CodeQL | – |
 | 5. PR | Opened with plan, evidence, what was and wasn't tested, assumptions; assigned to a human | `gh pr create --assignee` | Approves, merges |
@@ -65,7 +65,7 @@ Auth: your local Claude Code login works; CI uses the `CLAUDE_CODE_OAUTH_TOKEN` 
 - **Agents never merge or release:** denied in `.claude/settings.json`, not in any allow list, and blocked by the `main` ruleset.
 - **Agents cannot change their guardrails:** a hook blocks edits to workflows, settings, hooks, agent prompts, CODEOWNERS, `context/rules.md` and `context/risk-tiers.json`.
 - **Audit log:** a hook appends every tool call to `runs/audit.jsonl`; CI uploads it as an artifact.
-- **Untrusted input scan:** before any agent reads an issue or PR, `scripts/scan-untrusted.ts` checks titles, bodies, comments and reviews for prompt injection (including hidden HTML comments, base64, Unicode tag and zero-width tricks), exfiltration attempts and pasted secrets. Findings pause the agents and fail the PR `gates` check; only a maintainer's `scan-cleared` label resumes them, and never for secrets.
+- **Untrusted input scan:** before any agent reads an issue or PR, `scripts/scan-untrusted.ts` checks titles, bodies, comments and reviews for prompt injection (including hidden HTML comments, base64, Unicode tag and zero-width tricks), exfiltration attempts and pasted secrets. Findings pause the agents and fail the PR `gates` check. Fixing the text, or a maintainer's `scan-cleared` label (never for secrets), resumes them, and intake then checks readiness again, so nobody adds `ready` by hand.
 - **Escalation:** every agent reports a confidence; low confidence or a rules conflict stops the pipeline and asks a human.
 
 ## GitHub setup checklist
