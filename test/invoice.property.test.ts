@@ -63,7 +63,7 @@ describe("computeTotals properties", () => {
 
   it("rejects out-of-range inputs with RangeError", () => {
     fc.assert(
-      fc.property(fc.oneof(fc.double({ min: 1.0001, max: 1e6, noNaN: true }), fc.double({ min: -1e6, max: -0.0001, noNaN: true })), (t) => {
+      fc.property(fc.oneof(fc.double({ min: 1.0001, max: 1e6, noNaN: true }), fc.double({ min: -1e6, max: -0.0001, noNaN: true }), fc.constantFrom(NaN, Infinity, -Infinity)), (t) => {
         expect(() => computeTotals([], t)).toThrow(RangeError);
       }),
     );
