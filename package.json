@@ -14,7 +14,8 @@
     "mutation": "stryker run",
     "risk-tier": "tsx scripts/risk-tier.ts",
     "red-green": "scripts/red-green.sh",
-    "metrics": "tsx scripts/metrics.ts"
+    "metrics": "tsx scripts/metrics.ts",
+    "test:adversarial": "vitest run --config vitest.adversarial.config.ts"
   },
   "license": "MIT",
   "type": "module",
