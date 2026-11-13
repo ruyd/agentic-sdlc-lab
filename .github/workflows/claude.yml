@@ -24,19 +24,20 @@ jobs:
       # Tested by test/claude-gate-reply.test.ts, which runs this script against a stub `gh`.
       - run: |
           resume="Then a maintainer adds \`ready\` and mentions @claude again."
-          has() { jq -e --arg l "$1" 'index($l) != null' <<<"$LABELS" >/dev/null; }
+          # Fail loudly rather than fall back to the wrong reply if the labels did not arrive as a JSON array.
+          jq -e 'type == "array"' <<<"${LABELS:-}" >/dev/null || { echo "::error::LABELS is not a JSON array"; exit 1; }
+          # Case-insensitive, like the job's `contains(...)` check.
+          has() { jq -e --arg l "$1" 'map(ascii_downcase) | index($l) != null' <<<"$LABELS" >/dev/null; }
           # `security` is ambiguous: the scan adds it for a pasted secret, the intake agent for a vulnerability report.
           secret_note="If a secret was posted, rotate it now and delete the text: \`scan-cleared\` does not override a secret."
-          if has prompt-injection && has scan-cleared; then
-            msg="@claude did not run: the flag on this thread was cleared, but the issue is not labeled \`ready\`."
-            if has security; then msg="$msg $secret_note"; fi
-            msg="$msg $resume"
-          elif has prompt-injection && has security; then
+          if has prompt-injection && has security; then
             msg="@claude did not run: text in this thread was flagged, and the issue is marked \`security\`. $secret_note Otherwise edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. $resume"
+          elif has prompt-injection && has scan-cleared; then
+            msg="@claude did not run: the flag on this thread was cleared, but the issue is not labeled \`ready\`. $resume"
           elif has prompt-injection; then
             msg="@claude did not run: text in this thread was flagged as possible prompt injection. Edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. $resume"
           elif has security; then
-            msg="@claude did not run: this issue is marked \`security\`. Vulnerabilities belong in a private report (Security, then Report a vulnerability), not a public issue. If a secret was posted here, rotate it even if the text was deleted. If it is safe to work on in public, a maintainer adds \`ready\` and mentions @claude again."
+            msg="@claude did not run: this issue is marked \`security\`. If a secret was posted here, rotate it even if the text was deleted. Vulnerabilities belong in a private report (Security, then Report a vulnerability), not a public issue. If it is safe to work on in public, a maintainer adds \`ready\` and mentions @claude again."
           else
             msg="Intake gate: this issue is not labeled \`ready\` yet. Add the missing details the intake comment asked for (or a maintainer adds \`ready\`), then mention @claude again."
           fi

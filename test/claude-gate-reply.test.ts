@@ -1,12 +1,14 @@
 // Runs the `gate` reply script from .github/workflows/claude.yml against a stub `gh` for each label state.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+const WORKFLOW = resolve(".github/workflows/claude.yml");
+
 function gateScript(): string {
-  const lines = readFileSync(".github/workflows/claude.yml", "utf8").split("\n");
+  const lines = readFileSync(WORKFLOW, "utf8").split("\n");
   const marker = lines.findIndex((l) => l.includes("# gate-reply:"));
   const run = lines.findIndex((l, i) => i > marker && l.trim() === "- run: |");
   const end = lines.findIndex((l, i) => i > run && l.trim() === "env:");
@@ -16,7 +18,7 @@ function gateScript(): string {
   return script;
 }
 
-function reply(labels: string[]): string {
+function reply(labels: string[] | string | undefined): string {
   const dir = mkdtempSync(join(tmpdir(), "gate-"));
   const out = join(dir, "body.txt");
   const gh = join(dir, "gh");
@@ -24,7 +26,7 @@ function reply(labels: string[]): string {
   writeFileSync(gh, `#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = "--body" ] && printf '%s' "$2" > "${out}"; shift; done\n`);
   chmodSync(gh, 0o755);
   execFileSync("bash", ["-e", "-c", gateScript()], {
-    env: { PATH: `${dir}:${process.env.PATH}`, NUM: "1", REPO: "o/r", LABELS: JSON.stringify(labels) },
+    env: { PATH: `${dir}:${process.env.PATH}`, NUM: "1", REPO: "o/r", ...(labels === undefined ? {} : { LABELS: typeof labels === "string" ? labels : JSON.stringify(labels) }) },
   });
   return readFileSync(out, "utf8");
 }
@@ -66,10 +68,21 @@ describe("@claude gate reply", () => {
     expect(r).not.toContain("missing details");
   });
 
-  it("keeps the secret warning on a cleared thread marked security", () => {
+  it("does not call a thread marked security cleared, since scan-cleared never overrides a secret", () => {
     const r = reply(["prompt-injection", "security", "scan-cleared"]);
-    expect(r).toContain("was cleared");
+    expect(r).not.toContain("was cleared");
     expect(r).toContain("does not override a secret");
+  });
+
+  it("matches labels case-insensitively, like the job's if: check", () => {
+    expect(reply(["Prompt-Injection"])).toContain("flagged as possible prompt injection");
+    expect(reply(["Security"])).toContain("rotate it even if the text was deleted");
+  });
+
+  it("fails instead of giving the readiness reply when LABELS is missing or not a JSON array", () => {
+    for (const bad of ["prompt-injection,security", undefined, "null"]) {
+      expect(() => reply(bad)).toThrow();
+    }
   });
 
   it("does not ask for scan-cleared again once it is there", () => {
@@ -84,7 +97,15 @@ describe("@claude gate reply", () => {
   });
 
   it("handles quoted or shell-like label names without expanding them", () => {
-    expect(reply(['"$(touch gate-pwned)"', "prompt-injection"])).toContain("flagged as possible prompt injection");
+    const dir = mkdtempSync(join(tmpdir(), "gate-cwd-"));
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      expect(reply(['"$(touch gate-pwned)"', "`touch gate-pwned`", "prompt-injection"])).toContain("flagged as possible prompt injection");
+      expect(existsSync(join(dir, "gate-pwned"))).toBe(false);
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
   it("matches label names exactly", () => {
