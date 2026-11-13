@@ -19,10 +19,18 @@ jobs:
     permissions:
       issues: write
     steps:
-      # A flagged issue is not ready because the input scan paused it, not because details are missing.
+      # gate-reply: tell the reporter the real reason @claude did not run and how to resume.
+      # A flag (scan or intake agent) removes `ready`, and clearing the flag does not restore it.
+      # Tested by test/claude-gate-reply.test.ts, which runs this script against a stub `gh`.
       - run: |
-          if [ "$FLAGGED" = "true" ]; then
-            msg="@claude did not run: the input scan flagged text in this thread (see the scan report above). Edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive."
+          resume="Then a maintainer adds \`ready\` and mentions @claude again."
+          has() { case ",$LABELS," in *",$1,"*) return 0 ;; esac; return 1; }
+          if has prompt-injection && has security; then
+            msg="@claude did not run: a secret was found in this thread. Rotate it now, then delete or edit the text that contains it. \`scan-cleared\` does not override a secret. $resume"
+          elif has prompt-injection && has scan-cleared; then
+            msg="@claude did not run: the flag on this thread was cleared, but the issue is not labeled \`ready\`. $resume"
+          elif has prompt-injection; then
+            msg="@claude did not run: text in this thread was flagged as possible prompt injection. Edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. $resume"
           else
             msg="Intake gate: this issue is not labeled \`ready\` yet. Add the missing details the intake comment asked for (or a maintainer adds \`ready\`), then mention @claude again."
           fi
@@ -31,7 +39,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           NUM: ${{ github.event.issue.number }}
           REPO: ${{ github.repository }}
-          FLAGGED: ${{ contains(github.event.issue.labels.*.name, 'prompt-injection') }}
+          LABELS: ${{ join(github.event.issue.labels.*.name, ',') }}
 
   scan:
     # Input scan of everything @claude would read: title, body, comments, reviews (scripts/scan-untrusted.ts).
