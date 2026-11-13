@@ -15,6 +15,38 @@ describe("computeTotals", () => {
     expect(computeTotals(lines, 0.1, 10)).toEqual({ subtotalCents: 22_500, discountCents: 2_250, taxCents: 2_025, totalCents: 22_275 });
   });
 
+  // Line discounts (issue #4): each line is reduced first, so subtotalCents is net and the invariant still holds.
+  it("applies a line discount to only that line, before tax", () => {
+    const discounted = [{ ...lines[0]!, discountPercent: 10 }, lines[1]!];
+    expect(computeTotals(discounted, 0.1)).toEqual({ subtotalCents: 20_500, discountCents: 0, taxCents: 2_050, totalCents: 22_550 });
+  });
+
+  it("applies line discounts first, then the invoice discount", () => {
+    const discounted = [{ ...lines[0]!, discountPercent: 10 }, lines[1]!];
+    expect(computeTotals(discounted, 0.1, 10)).toEqual({ subtotalCents: 20_500, discountCents: 2_050, taxCents: 1_845, totalCents: 20_295 });
+  });
+
+  it("leaves totals unchanged when no line has a discount", () => {
+    const explicitZero = lines.map((l) => ({ ...l, discountPercent: 0 }));
+    expect(computeTotals(explicitZero, 0.1, 10)).toEqual(computeTotals(lines, 0.1, 10));
+  });
+
+  it("accepts line discount boundaries 0 and 100", () => {
+    expect(computeTotals([{ ...lines[0]!, discountPercent: 0 }], 0).subtotalCents).toBe(20_000);
+    expect(computeTotals([{ ...lines[0]!, discountPercent: 100 }], 0.1)).toEqual({ subtotalCents: 0, discountCents: 0, taxCents: 0, totalCents: 0 });
+  });
+
+  it("rounds each line's discount on its own", () => {
+    const pennies = [1, 2, 3].map((i) => ({ description: `item ${i}`, quantity: 1, unitPriceCents: 5, discountPercent: 10 }));
+    expect(computeTotals(pennies, 0).subtotalCents).toBe(12); // 0.5c rounds to 1c per line: 3 x 4c
+  });
+
+  it("rejects out-of-range and non-finite line discounts, naming the line", () => {
+    for (const bad of [-1, 101, NaN, Infinity]) {
+      expect(() => computeTotals([{ ...lines[0]!, discountPercent: bad }], 0)).toThrow(/discountPercent must be between 0 and 100 on "Consulting"/);
+    }
+  });
+
   // Added after mutation testing showed these boundaries were unpinned.
   it("accepts the discount boundaries 0 and 100", () => {
     expect(computeTotals(lines, 0.1, 0).discountCents).toBe(0);
