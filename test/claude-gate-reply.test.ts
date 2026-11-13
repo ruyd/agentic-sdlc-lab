@@ -11,7 +11,9 @@ function gateScript(): string {
   const run = lines.findIndex((l, i) => i > marker && l.trim() === "- run: |");
   const end = lines.findIndex((l, i) => i > run && l.trim() === "env:");
   if (marker < 0 || run < 0 || end < 0) throw new Error("gate reply step not found");
-  return lines.slice(run + 1, end).map((l) => l.replace(/^ {10}/, "")).join("\n");
+  const script = lines.slice(run + 1, end).map((l) => l.replace(/^ {10}/, "")).join("\n");
+  if (!script.includes("gh issue comment")) throw new Error("gate reply step extracted without its gh call");
+  return script;
 }
 
 function reply(labels: string[]): string {
@@ -44,12 +46,29 @@ describe("@claude gate reply", () => {
     expect(r).toContain("adds `ready` and mentions @claude again");
   });
 
-  it("never offers scan-cleared as the fix for a secret", () => {
+  it("never offers scan-cleared for a secret without saying it does not apply", () => {
     const r = reply(["prompt-injection", "security"]);
-    expect(r).toContain("Rotate it");
+    expect(r).toContain("rotate it now");
     expect(r).toContain("does not override a secret");
-    expect(r).not.toMatch(/maintainer adds `scan-cleared`/);
     expect(r).toContain("adds `ready` and mentions @claude again");
+  });
+
+  it("does not claim a secret, since `security` may mean a vulnerability report", () => {
+    for (const labels of [["bug", "security", "prompt-injection"], ["prompt-injection", "security"]]) {
+      expect(reply(labels)).not.toMatch(/secret was found/);
+    }
+  });
+
+  it("sends a security issue that is not ready to private reporting, not to missing details", () => {
+    const r = reply(["bug", "security"]);
+    expect(r).toContain("private report");
+    expect(r).not.toContain("missing details");
+  });
+
+  it("keeps the secret warning on a cleared thread marked security", () => {
+    const r = reply(["prompt-injection", "security", "scan-cleared"]);
+    expect(r).toContain("was cleared");
+    expect(r).toContain("does not override a secret");
   });
 
   it("does not ask for scan-cleared again once it is there", () => {
