@@ -12,7 +12,8 @@ jobs:
     #   1. Is the comment a call to @claude (a line starting with it, on an open issue or PR)?
     #   2. Input scan of everything @claude would read (scripts/scan-untrusted.ts), so a flag in the
     #      triggering comment itself counts. The labels are read live, not from the event payload.
-    #   3. Issue not `ready`: explain the real reason. Flagged on a `ready` issue or PR: post the scan report.
+    #   3. Flagged by the scan: label the thread and post the report. Flagged live (by the intake agent) or issue
+    #      not `ready`: explain the real reason. Claude runs only when nothing is flagged and the issue is `ready`.
     if: |
       contains(github.event.comment.body, '@claude')
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
@@ -29,12 +30,15 @@ jobs:
       KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
       NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
     steps:
-      # invocation: only a line that starts with @claude calls it. A passing mention, a quoted reply
-      # ("> @claude") or a comment on a closed issue or PR does not. Tested by test/claude-gate-reply.test.ts.
+      # invocation: a call is a line that starts with @claude (any case, up to 3 spaces of indent) followed by a
+      # space, comma, colon or the end of the line. Code blocks (fenced or indented 4+ spaces), HTML comments,
+      # quoted replies ("> @claude"), possessives ("@claude's") and comments on closed issues or PRs do not count.
+      # Tested by test/claude-gate-reply.test.ts.
       - id: invoke
         run: |
           if [ "${STATE:-}" = "closed" ]; then echo "invoked=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if grep -qE '^[[:space:]]*@claude([^[:alnum:]_-]|$)' <<<"${BODY:-}"; then
+          visible="$(printf '%s' "${BODY:-}" | perl -0777 -pe 's/\r//g; s/<!--.*?(?:-->|\z)//gs; s/^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[^\n]*$|\z)//gms')"
+          if grep -qiE '^ {0,3}@claude([[:space:],:]|$)' <<<"$visible"; then
             echo "invoked=true" >> "$GITHUB_OUTPUT"
           else
             echo "invoked=false" >> "$GITHUB_OUTPUT"
@@ -52,6 +56,10 @@ jobs:
       - id: scan
         if: steps.invoke.outputs.invoked == 'true'
         run: npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM"
+        env:
+          # The triggering comment, in case the API read above does not include it yet.
+          EXTRA_TEXT: ${{ github.event.comment.body }}
+      # live-labels: tested by test/claude-gate-reply.test.ts.
       - name: Read labels live and add what the scan just found
         id: labels
         if: steps.invoke.outputs.invoked == 'true'
@@ -61,20 +69,38 @@ jobs:
           if [ "$SECRET" = "true" ]; then json="$(jq -c '. + ["security"] | unique' <<<"$json")"; fi
           echo "json=$(jq -c . <<<"$json")" >> "$GITHUB_OUTPUT"
           echo "ready=$(jq -r 'map(ascii_downcase) | index("ready") != null' <<<"$json")" >> "$GITHUB_OUTPUT"
+          # A live flag blocks too (the intake agent can flag what the patterns miss), unless a maintainer cleared it.
+          echo "flagged=$(jq -r 'map(ascii_downcase) | index("prompt-injection") != null and index("scan-cleared") == null' <<<"$json")" >> "$GITHUB_OUTPUT"
         env:
           BLOCKED: ${{ steps.scan.outputs.blocked }}
           SECRET: ${{ steps.scan.outputs.secret }}
-      - name: Explain why @claude did not run
-        if: steps.scan.outputs.blocked == 'true' && (env.KIND == 'pr' || steps.labels.outputs.ready == 'true')
+      - name: Scan blocked it - label the thread and post the report
+        if: steps.scan.outputs.blocked == 'true'
         run: |
-          gh "$KIND" edit "$NUM" --add-label prompt-injection
-          { echo "@claude did not run."; echo; cat runs/scan-report.md; } > runs/claude-blocked.md
+          add="prompt-injection"
+          if [ "$SECRET" = "true" ]; then add="$add,security"; fi
+          gh "$KIND" edit "$NUM" --add-label "$add" --remove-label ready
+          {
+            echo "@claude did not run."
+            echo
+            cat runs/scan-report.md
+            if [ "$KIND" = "issue" ]; then
+              echo
+              echo "Once the flag is cleared, intake checks the issue again and adds \`ready\` if it is complete. Then mention @claude again."
+            fi
+          } > runs/claude-blocked.md
           gh "$KIND" comment "$NUM" --body-file runs/claude-blocked.md
+        env:
+          SECRET: ${{ steps.scan.outputs.secret }}
+      - name: Flagged PR - explain
+        if: env.KIND == 'pr' && steps.scan.outputs.blocked == 'false' && steps.labels.outputs.flagged == 'true'
+        run: |
+          gh pr comment "$NUM" --body "@claude did not run: this PR is labeled \`prompt-injection\`. A maintainer reviews the text and adds \`scan-cleared\` if it is safe, then mentions @claude again."
       # gate-reply: tell the reporter the real reason @claude did not run and how to resume.
       # Clearing a flag makes intake check readiness again (intake.yml), so nobody adds `ready` by hand.
       # Tested by test/claude-gate-reply.test.ts, which runs this script against a stub `gh`.
-      - name: Explain why an issue that is not ready did not run
-        if: env.KIND == 'issue' && steps.labels.outputs.ready == 'false'
+      - name: Explain why @claude did not run on this issue
+        if: env.KIND == 'issue' && steps.scan.outputs.blocked == 'false' && (steps.labels.outputs.ready == 'false' || steps.labels.outputs.flagged == 'true')
         run: |
           resume="Once the flag is cleared, intake checks the issue again and adds \`ready\` if it is complete. Then mention @claude again."
           # Fail loudly rather than fall back to the wrong reply if the labels did not arrive as a JSON array.
@@ -101,16 +127,26 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           LABELS: ${{ steps.labels.outputs.json }}
+      # decide: Claude runs only when invoked, the scan is clean, nothing is flagged live, and it is a PR or a
+      # `ready` issue. Any missing value (a failed step) means no. Tested by test/claude-gate-reply.test.ts.
       - id: decide
         if: always()
         run: |
           run=false
-          if [ "$INVOKED" = "true" ] && [ "$BLOCKED" = "false" ] && { [ "$KIND" = "pr" ] || [ "$READY" = "true" ]; }; then run=true; fi
+          if [ "$INVOKED" = "true" ] && [ "$BLOCKED" = "false" ] && [ "$FLAGGED" = "false" ] \
+             && { [ "$KIND" = "pr" ] || [ "$READY" = "true" ]; }; then run=true; fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
         env:
           INVOKED: ${{ steps.invoke.outputs.invoked }}
           BLOCKED: ${{ steps.scan.outputs.blocked }}
+          FLAGGED: ${{ steps.labels.outputs.flagged }}
           READY: ${{ steps.labels.outputs.ready }}
+      - name: The gate itself failed - say so instead of staying silent
+        if: failure() && steps.invoke.outputs.invoked == 'true'
+        run: |
+          gh "$KIND" comment "$NUM" --body "@claude did not run: the gate check failed before it could decide. A maintainer can look at the run: $RUN_URL"
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   claude:
     needs: gate

@@ -35,13 +35,30 @@ function invoked(body: string, state = "open"): boolean {
 
 describe("@claude invocation", () => {
   it("counts a line that starts with @claude", () => {
-    for (const body of ["@claude fix this", "  @claude please", "Thanks!\n@claude go ahead", "Thanks!\r\n@claude go", "@claude", "@claude, plan it"]) {
+    for (const body of ["@claude fix this", "  @claude please", "   @claude max indent", "Thanks!\n@claude go ahead", "Thanks!\r\n@claude go", "@claude", "@claude, plan it", "@claude: plan it", "@Claude fix this", "@CLAUDE go", "```\ncode\n```\n@claude after the block", "<!-- note -->\n@claude after a comment"]) {
       expect(invoked(body), body).toBe(true);
     }
   });
 
   it("ignores passing mentions, quotes, code and look-alike handles", () => {
-    for (const body of ["Test done on an @claude comment. Closing.", "> @claude fix this", "`@claude` is the trigger", "@claudebot hi", "@claude-dev hi", "@claude_x hi", ""]) {
+    for (const body of [
+      "Test done on an @claude comment. Closing.",
+      "> @claude fix this",
+      "`@claude` is the trigger",
+      "@claudebot hi",
+      "@claude-dev hi",
+      "@claude_x hi",
+      "@claude's last run failed, closing.",
+      "@claude.",
+      "Example trigger:\n```\n@claude fix this\n```",
+      "Example:\n~~~md\n@claude fix this\n~~~",
+      "Unclosed fence:\n```\n@claude fix this",
+      "Example:\n\n    @claude fix this",
+      "\t@claude fix this",
+      "LGTM\n<!--\n@claude fix this\n-->",
+      "LGTM <!-- @claude fix this",
+      "",
+    ]) {
       expect(invoked(body), body).toBe(false);
     }
   });
@@ -164,5 +181,55 @@ describe("@claude gate reply", () => {
   it("matches label names exactly", () => {
     expect(reply(["prompt-injection-review"])).toContain("Add the missing details");
     expect(reply(["prompt-injection", "security-review"])).toContain("flagged as possible prompt injection");
+  });
+});
+
+function runStep(marker: string, mustContain: string, env: Record<string, string>, ghOutput = "[]"): Record<string, string> {
+  const dir = mkdtempSync(join(tmpdir(), "step-"));
+  const out = join(dir, "out");
+  writeFileSync(out, "");
+  // Stub gh: `gh <kind> view ... --jq ...` prints the label list.
+  writeFileSync(join(dir, "gh"), `#!/usr/bin/env bash\nprintf '%s\\n' '${ghOutput}'\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript(marker, mustContain)], {
+    env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, KIND: "issue", NUM: "1", ...env },
+  });
+  return Object.fromEntries(readFileSync(out, "utf8").trim().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+}
+
+describe("@claude live labels", () => {
+  const labels = (live: string[], blocked = "false", secret = "false") =>
+    runStep("live-labels", "flagged=", { BLOCKED: blocked, SECRET: secret }, JSON.stringify(live));
+
+  it("adds what the scan just found to the live labels", () => {
+    const o = labels(["bug"], "true", "true");
+    expect(JSON.parse(o.json!)).toEqual(["bug", "prompt-injection", "security"]);
+    expect(o.flagged).toBe("true");
+    expect(o.ready).toBe("false");
+  });
+
+  it("treats a live prompt-injection label as flagged unless scan-cleared is there", () => {
+    expect(labels(["ready", "prompt-injection"]).flagged).toBe("true");
+    expect(labels(["ready", "Prompt-Injection"]).flagged).toBe("true");
+    expect(labels(["ready", "prompt-injection", "scan-cleared"]).flagged).toBe("false");
+    expect(labels(["Ready"]).ready).toBe("true");
+  });
+});
+
+describe("@claude decide", () => {
+  const decide = (env: Record<string, string>, kind = "issue") =>
+    runStep("decide", "run=", { KIND: kind, INVOKED: "true", BLOCKED: "false", FLAGGED: "false", READY: "true", ...env }).run;
+
+  it("runs only on a clean, unflagged, ready issue or a clean, unflagged PR", () => {
+    expect(decide({})).toBe("true");
+    expect(decide({ READY: "" }, "pr")).toBe("true");
+  });
+
+  it("does not run when anything is off or missing", () => {
+    const cases: Record<string, string>[] = [{ INVOKED: "false" }, { BLOCKED: "true" }, { FLAGGED: "true" }, { READY: "false" }, { BLOCKED: "" }, { FLAGGED: "" }, { INVOKED: "" }];
+    for (const env of cases) {
+      expect(decide(env), JSON.stringify(env)).toBe("false");
+    }
+    expect(decide({ FLAGGED: "true" }, "pr")).toBe("false");
   });
 });
