@@ -48,7 +48,6 @@ reviews") lists exactly what each one checks.
 | Database files (migrations, schema, SQL) | DBA: data loss, locking and rollout, query plans, indexing, integrity | `dba` | `scripts/data-loss-gate.ts`: destructive statements need `data-loss-approved` |
 | Backend code | Performance: algorithmic cost, data structures, logic flow, caching and I/O, memory | `performance` | – |
 | Backend code or dependencies | Security: pinned versions, safety of every added/updated/downgraded package, code security | `security` | `scripts/deps-gate.ts`: exact versions only; new versions at least 7 days old and not deprecated (`deps-cooldown-waived` for urgent fixes) |
-
 | Frontend (components, styles) | UX designer: clarity, consistency, states, accessibility, responsive, forms | `ux` | – |
 | Frontend | Animations / motion designer: purpose, timing and easing, reduced motion, flashing, animation performance | `motion` | – |
 | Frontend, when the app can start in CI | Synthetic user: follows `frontend-user-testing-script.md` in a real browser, replacing the manual UI test pass | `usertest` | The app runs on a local URL only; pinned Playwright MCP |
