@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { addedLinesByFile, findDataLoss } from "../scripts/lib/data-loss.js";
-import { route, validateConfig } from "../scripts/lib/review-routing.js";
+import { route, usertestBlocker, validateConfig } from "../scripts/lib/review-routing.js";
 
 const cfg = validateConfig(JSON.parse(readFileSync("context/review-routing.json", "utf8")));
 
@@ -30,6 +30,30 @@ describe("specialist routing", () => {
   it("rejects a config with a typo instead of routing nothing", () => {
     expect(() => validateConfig({ backend: "src/**", frontend: [], db: { paths: [] }, dependencies: [] })).toThrow(/backend/);
     expect(() => validateConfig({ backend: [], frontend: [], dependencies: [] })).toThrow(/db/);
+  });
+});
+
+describe("synthetic user test prerequisites", () => {
+  const app = (frontendApp: object) => validateConfig({ ...JSON.parse(readFileSync("context/review-routing.json", "utf8")), frontendApp });
+
+  it("runs only with a start command and a testing script", () => {
+    expect(usertestBlocker(app({ start: "npm run dev", url: "http://localhost:5173" }), true)).toBeNull();
+    expect(usertestBlocker(app({ start: "", url: "http://localhost:5173" }), true)).toMatch(/start/);
+    expect(usertestBlocker(app({ start: "npm run dev" }), false)).toMatch(/frontend-user-testing-script\.md/);
+  });
+
+  it("only ever browses a local address", () => {
+    for (const url of ["http://127.0.0.1:8080/", "http://[::1]:3000", "https://localhost"]) {
+      expect(usertestBlocker(app({ start: "x", url }), true), url).toBeNull();
+    }
+    for (const url of ["https://example.com", "http://localhost.evil.com", "http://10.0.0.5:3000", "file:///etc/passwd"]) {
+      expect(usertestBlocker(app({ start: "x", url }), true), url).toMatch(/local address/);
+    }
+  });
+
+  it("defaults the URL and script path when the config leaves them out", () => {
+    expect(app({ start: "x" }).frontendApp).toEqual({ start: "x", url: "http://localhost:3000", testingScript: "frontend-user-testing-script.md" });
+    expect(validateConfig({ backend: [], frontend: [], db: { paths: [] }, dependencies: [] }).frontendApp.start).toBe("");
   });
 });
 

@@ -90,6 +90,22 @@ When you work on a change locally, apply the same checks before opening the PR.
     dependency jumps, downgrades, licenses.
   - *Changed code:* input validation at boundaries, no secrets in code or logs, no injection, authz on new endpoints.
 
+**Frontend changes** (frontend paths) get three reviews:
+- **UX designer** (`.claude/agents/ux.md`): clarity of labels and errors, consistency with existing components and
+  design tokens, loading/empty/error/success states, accessibility (WCAG 2.2 AA: semantics, labels, keyboard, focus,
+  contrast, targets), responsive layout from 320px, forms that keep input and confirm destructive actions.
+- **Animations / motion designer** (`.claude/agents/motion.md`): every animation has a purpose; timing (about
+  100-400ms) and easing consistent with the repo's tokens; `prefers-reduced-motion` honoured (large or looping motion
+  without it is a blocker); nothing flashes more than three times a second; only `transform`/`opacity` animated;
+  interrupted animations leave a correct UI.
+- **Synthetic user test** (`.claude/agents/usertest.md`): replaces the manual UI test pass. CI starts the app with
+  `frontendApp.start` (local URL only), and an agent with a browser (pinned Playwright MCP) follows the repo's
+  `frontend-user-testing-script.md` step by step: PASS/FAIL/BLOCKED per step with screenshots, plus slow responses,
+  console errors and layout or focus problems. A failed step in a journey marked critical is a blocker. It uses only
+  the test data in the script, never real accounts or payment details, and never leaves the app's local URL. Without a
+  start command or a script it is skipped, and the routing summary says why. Template:
+  `docs/templates/frontend-user-testing-script.md`. When you change the UI locally, update the script with it.
+
 ## Working agreement
 - Keep PRs small: one issue, one PR, under ~300 changed lines.
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`).

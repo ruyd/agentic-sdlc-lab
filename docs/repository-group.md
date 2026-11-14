@@ -42,7 +42,9 @@ a tag, so a change to the base reaches each member only when that member chooses
 5. Add the repo to the base's `context/service-map.md` with a PR here.
 6. Code Group Improvement Layer: copy `.agent-base/context/review-routing.json` to the member's `context/` and set its
    backend, frontend, database and dependency paths (without a copy, the base defaults apply). With a database, set
-   `db.explainCommand` to a command that prints query plans for changed queries. Run the base gates against the
+   `db.explainCommand` to a command that prints query plans for changed queries. With a frontend, set
+   `frontendApp.start` (and `url`) and copy `.agent-base/docs/templates/frontend-user-testing-script.md` to the repo
+   root as `frontend-user-testing-script.md`, then fill in its journeys. Run the base gates against the
    member's code: `npx tsx .agent-base/scripts/review-routing.ts` and `npx tsx .agent-base/scripts/data-loss-gate.ts`.
 
 ## Upgrading members
