@@ -92,7 +92,10 @@ jobs:
             echo "@claude did not run."
             echo
             cat runs/scan-report.md
-            if [ "$KIND" = "issue" ]; then
+            if [ "$KIND" = "issue" ] && [ "$SECRET" = "true" ]; then
+              echo
+              echo "Rotate the leaked secret now and delete the text. Intake will not add \`ready\` to a \`security\` issue: a maintainer adds it once it is safe, then mentions @claude again."
+            elif [ "$KIND" = "issue" ]; then
               echo
               echo "Once the flag is cleared, intake checks the issue again and adds \`ready\` if it is complete. Then mention @claude again."
             fi
@@ -118,10 +121,12 @@ jobs:
           has() { jq -e --arg l "$1" 'map(ascii_downcase) | index($l) != null' <<<"$LABELS" >/dev/null; }
           # `security` is ambiguous: the scan adds it for a pasted secret, the intake agent for a vulnerability report.
           secret_note="If a secret was posted, rotate it now and delete the text: \`scan-cleared\` does not override a secret."
+          # Intake never adds `ready` to a `security` issue, so there a maintainer does, once it is safe.
+          resume_security="Because the issue is marked \`security\`, intake will not add \`ready\`: once the flag is cleared and any leaked secret is rotated, a maintainer adds \`ready\` and mentions @claude again."
           if has prompt-injection && has security; then
             msg="@claude did not run: text in this thread was flagged, and the issue is marked \`security\`. $secret_note Otherwise edit the flagged text"
             if has scan-cleared; then msg="$msg."; else msg="$msg, or a maintainer adds \`scan-cleared\` if it is a false positive."; fi
-            msg="$msg $resume"
+            msg="$msg $resume_security"
           elif has prompt-injection && has scan-cleared; then
             msg="@claude did not run: this thread is still labeled \`prompt-injection\` although \`scan-cleared\` is set. Either intake is still clearing the scan flag (mention @claude again in a minute), or the intake agent flagged other text, which only a maintainer can clear by removing \`prompt-injection\` after reviewing it."
           elif has prompt-injection; then
@@ -129,7 +134,7 @@ jobs:
           elif has security; then
             msg="@claude did not run: this issue is marked \`security\`. If a secret was posted here, rotate it even if the text was deleted. Vulnerabilities belong in a private report (Security, then Report a vulnerability), not a public issue. If it is safe to work on in public, a maintainer adds \`ready\` and mentions @claude again."
           else
-            msg="Intake gate: this issue is not labeled \`ready\` yet. Add the missing details the intake comment asked for (or a maintainer adds \`ready\`), then mention @claude again."
+            msg="Intake gate: this issue is not labeled \`ready\` yet. Edit the issue description to add the missing details the intake comment asked for (intake checks again when the description changes; comments do not trigger it), or a maintainer adds \`ready\`. Then mention @claude again."
           fi
           gh issue comment "$NUM" -R "$REPO" --body "$msg"
         env:
@@ -179,6 +184,7 @@ jobs:
         with: { ref: "${{ github.event.repository.default_branch }}", path: .scanner }
       # rescan: tested by test/claude-gate-reply.test.ts.
       - name: Scan again just before Claude reads the thread
+        id: rescan
         working-directory: .scanner
         env:
           GH_TOKEN: ${{ github.token }}
@@ -195,6 +201,15 @@ jobs:
             elif $kind == "issue" and index("ready") == null then "not-ready"
             else "go" end' <<<"$labels")"
           if [ "$verdict" != "go" ]; then echo "::error::The thread changed after the gate decided: $verdict."; exit 1; fi
+      - name: Say why Claude stopped
+        if: failure() && steps.rescan.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
+          NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh "$KIND" comment "$NUM" --body "@claude stopped before reading the thread: something changed after the gate decided (new flagged text, a \`prompt-injection\` label, or \`ready\` removed). Run: $RUN_URL"
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -116,14 +116,25 @@ describe("@claude gate reply", () => {
   it("asks for missing details on an issue that is only not ready", () => {
     for (const labels of [[], ["bug", "needs-info"]]) {
       const r = reply(labels);
-      expect(r).toContain("Add the missing details");
+      expect(r).toContain("add the missing details");
+      expect(r).toContain("Edit the issue description");
+      expect(r).toContain("comments do not trigger it");
       expect(r).not.toContain("flagged");
     }
   });
 
-  it("never tells a maintainer to add `ready` by hand to get past a flag", () => {
-    for (const labels of [["prompt-injection"], ["prompt-injection", "security"], ["prompt-injection", "scan-cleared"]]) {
+  it("never tells a maintainer to add `ready` by hand to get past a flag alone", () => {
+    for (const labels of [["prompt-injection"], ["prompt-injection", "scan-cleared"]]) {
       expect(reply(labels)).not.toMatch(/maintainer adds `ready`/);
+    }
+  });
+
+  it("on a flagged security issue, says a maintainer adds `ready`, since intake never will", () => {
+    for (const labels of [["prompt-injection", "security"], ["prompt-injection", "security", "scan-cleared"]]) {
+      const r = reply(labels);
+      expect(r).toContain("intake will not add `ready`");
+      expect(r).toContain("a maintainer adds `ready`");
+      expect(r).not.toContain("intake checks the issue again and adds `ready`");
     }
   });
 
@@ -139,7 +150,6 @@ describe("@claude gate reply", () => {
     const r = reply(["prompt-injection", "security"]);
     expect(r).toContain("rotate it now");
     expect(r).toContain("does not override a secret");
-    expect(r).toContain("intake checks the issue again and adds `ready`");
   });
 
   it("does not claim a secret, since `security` may mean a vulnerability report", () => {
@@ -182,7 +192,7 @@ describe("@claude gate reply", () => {
   });
 
   it("does not split a label whose name contains a comma", () => {
-    expect(reply(["wontfix,prompt-injection"])).toContain("Add the missing details");
+    expect(reply(["wontfix,prompt-injection"])).toContain("add the missing details");
   });
 
   it("handles quoted or shell-like label names without expanding them", () => {
@@ -198,7 +208,7 @@ describe("@claude gate reply", () => {
   });
 
   it("matches label names exactly", () => {
-    expect(reply(["prompt-injection-review"])).toContain("Add the missing details");
+    expect(reply(["prompt-injection-review"])).toContain("add the missing details");
     expect(reply(["prompt-injection", "security-review"])).toContain("flagged as possible prompt injection");
   });
 });

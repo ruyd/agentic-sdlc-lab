@@ -16,16 +16,13 @@ on:
     types: [opened, edited, reopened, labeled, unlabeled]
   issue_comment:
     types: [created, edited]
-# One queue per issue for the events that matter. Every other label change (the agent's own `bug`, `ready`, ...,
-# or any label event not made by a person) gets a group of its own, so it never replaces a real pending run.
+# One queue per issue for issue and comment events. Every label event gets a group of its own: a maintainer's
+# `scan-cleared` or flag removal can never be replaced by a later comment, and the agent's own label changes never
+# replace a real pending run. Every step reads labels live, so these runs need no ordering.
 concurrency:
   group: >-
     intake-${{ github.event.issue.number }}-${{
-      ((github.event.action == 'labeled' || github.event.action == 'unlabeled')
-        && (github.event.sender.type != 'User'
-            || (github.event.action == 'labeled' && github.event.label.name != 'scan-cleared')
-            || (github.event.action == 'unlabeled' && github.event.label.name != 'prompt-injection')))
-      && github.run_id || 'main' }}
+      (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.run_id || 'main' }}
   cancel-in-progress: false
 # `shell: bash` runs every step with -eo pipefail (the default for steps without it has no pipefail), so a failed
 # page of `gh api --paginate` fails the step instead of deciding from partial history. The tests use the same flags.
@@ -136,13 +133,16 @@ jobs:
       contents: read
       issues: write
       id-token: write
+    # No GH_TOKEN at job level: the agent must use its own app token, so the labels it sets are recorded as
+    # claude[bot] and never mistaken for the scan's (see flag-source). Only the plain steps get github.token.
     env:
-      GH_TOKEN: ${{ github.token }}
       NUM: ${{ github.event.issue.number }}
     steps:
       - uses: actions/checkout@v7
       - name: Labels before the agent runs
         id: pre
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           labels="$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
           echo "flagged=$(jq 'index("prompt-injection") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
@@ -182,30 +182,40 @@ jobs:
         run: |
           labels="$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
           bad=0
-          if [ "$CLEARED" != "true" ] && jq -e 'index("scan-cleared") != null' <<<"$labels" >/dev/null; then
-            gh issue edit "$NUM" --remove-label scan-cleared
-            echo "::error::scan-cleared was added during the agent run; removed it."
-            bad=1
-          fi
+          # Every repair is attempted even if another fails, and the restores come first.
+          fix() { gh issue edit "$NUM" "$@" || echo "::error::could not run: gh issue edit $*"; }
           if [ "$PRE_FLAGGED" = "true" ] && ! jq -e 'index("prompt-injection") != null' <<<"$labels" >/dev/null; then
-            gh issue edit "$NUM" --add-label prompt-injection --remove-label ready
+            fix --add-label prompt-injection --remove-label ready
             labels="$(jq -c '(. - ["ready"]) + ["prompt-injection"]' <<<"$labels")"
             echo "::error::prompt-injection was removed during the agent run; restored it."
             bad=1
           fi
           if [ "$PRE_SECURITY" = "true" ] && ! jq -e 'index("security") != null' <<<"$labels" >/dev/null; then
-            gh issue edit "$NUM" --add-label security --remove-label ready
+            fix --add-label security --remove-label ready
             labels="$(jq -c '(. - ["ready"]) + ["security"]' <<<"$labels")"
             echo "::error::security was removed during the agent run; restored it."
             bad=1
           fi
           if [ "$PRE_READY" != "true" ] && jq -e 'index("ready") != null and (index("security") != null or index("prompt-injection") != null)' <<<"$labels" >/dev/null; then
-            gh issue edit "$NUM" --remove-label ready
+            fix --remove-label ready
             echo "::error::ready was added to a flagged or security issue during the agent run; removed it."
             bad=1
           fi
+          if [ "$CLEARED" != "true" ] && jq -e 'index("scan-cleared") != null' <<<"$labels" >/dev/null; then
+            # A maintainer may add it while the agent runs; only an addition by anyone else is undone.
+            by="$(gh api "repos/$REPO/issues/$NUM/events" --paginate | jq -rs '
+              add | map(select(.event == "labeled" and (.label.name // "" | ascii_downcase) == "scan-cleared")) | last | .actor.type // ""')" || by=""
+            if [ "$by" != "User" ]; then
+              fix --remove-label scan-cleared
+              echo "::error::scan-cleared was added during the agent run, not by a person; removed it."
+              bad=1
+            fi
+          fi
           exit "$bad"
         env:
+          GH_TOKEN: ${{ github.token }}
+          PAGER: cat
+          REPO: ${{ github.repository }}
           CLEARED: ${{ needs.scan.outputs.cleared }}
           PRE_FLAGGED: ${{ steps.pre.outputs.flagged }}
           PRE_READY: ${{ steps.pre.outputs.ready }}

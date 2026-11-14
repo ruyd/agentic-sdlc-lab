@@ -24,7 +24,7 @@ jqexpr=""; args=("$@")
 for ((i=0; i<\${#args[@]}; i++)); do [ "\${args[$i]}" = "--jq" ] && jqexpr="\${args[$((i+1))]}"; done
 case "$1 $2" in
   "issue view"|"pr view") data="$VIEW_JSON" ;;
-  "issue edit"|"pr edit") echo "$*" >> "$EDIT_LOG"; exit 0 ;;
+  "issue edit"|"pr edit") echo "$*" >> "$EDIT_LOG"; [ -n "$EDIT_FAIL" ] && [[ "$*" == *"$EDIT_FAIL"* ]] && exit 1; exit 0 ;;
   api*) printf '%s\n' "$EVENTS_JSON"; [ -n "$EVENTS_FAIL" ] && exit 1; exit 0 ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
@@ -172,6 +172,33 @@ describe("intake: the agent cannot clear a flag", () => {
     const r = guard(["prompt-injection", "ready", "bug"], { PRE_FLAGGED: "true", PRE_READY: "false", CLEARED: "false" });
     expect(r.status).toBe(1);
     expect(r.edits).toContain("--remove-label ready");
+  });
+
+  it("keeps repairing when one edit fails, restoring the flag first", () => {
+    const r = guard(["scan-cleared", "ready"], { PRE_FLAGGED: "true", PRE_READY: "false", CLEARED: "false", EDIT_FAIL: "--remove-label scan-cleared" });
+    expect(r.status).toBe(1);
+    const edits = r.edits.trim().split("\n");
+    expect(edits[0]).toContain("--add-label prompt-injection");
+    expect(r.edits).toContain("--remove-label scan-cleared");
+  });
+
+  it("keeps going when the first repair fails", () => {
+    const r = guard(["security", "ready", "scan-cleared"], { PRE_FLAGGED: "true", PRE_READY: "false", PRE_SECURITY: "true", CLEARED: "false", EDIT_FAIL: "--add-label prompt-injection" });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--add-label prompt-injection");
+    expect(r.edits).toContain("--remove-label ready");
+    expect(r.edits).toContain("--remove-label scan-cleared");
+  });
+
+  it("leaves a scan-cleared that a person added while the agent ran", () => {
+    const events = JSON.stringify([labeled("scan-cleared", "maintainer")]);
+    expect(guard(["scan-cleared"], { PRE_FLAGGED: "false", CLEARED: "false", EVENTS_JSON: events })).toMatchObject({ status: 0, edits: "" });
+    const byBot = JSON.stringify([labeled("scan-cleared", "maintainer"), labeled("scan-cleared", AGENT)]);
+    expect(guard(["scan-cleared"], { PRE_FLAGGED: "false", CLEARED: "false", EVENTS_JSON: byBot }).status).toBe(1);
+  });
+
+  it("removes scan-cleared when its author cannot be read", () => {
+    expect(guard(["scan-cleared"], { PRE_FLAGGED: "false", CLEARED: "false", EVENTS_FAIL: "1" }).edits).toContain("--remove-label scan-cleared");
   });
 
   it("is case-insensitive, like GitHub labels", () => {
