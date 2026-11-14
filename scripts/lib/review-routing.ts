@@ -9,6 +9,7 @@ export interface RoutingConfig {
   db: { paths: string[]; explainCommand?: string };
   dependencies: string[];
   ignore: string[];
+  frontendApp: { start: string; url: string; testingScript: string };
 }
 
 export const BACKEND_REVIEWS = ["dba", "performance", "security"] as const;
@@ -36,6 +37,14 @@ export function route(files: string[], cfg: RoutingConfig): Route {
 }
 
 /** Throws on a config that would silently route nothing, so a typo fails loudly. */
+/** Why the synthetic user test cannot run, or null when it can (it needs a way to start the app and a script). */
+export function usertestBlocker(cfg: RoutingConfig, scriptExists: boolean): string | null {
+  if (!cfg.frontendApp.start) return "no frontendApp.start command in review-routing.json";
+  if (!scriptExists) return `no ${cfg.frontendApp.testingScript} in the repo`;
+  if (!/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/.test(cfg.frontendApp.url)) return "frontendApp.url must be a local address (the test never browses external sites)";
+  return null;
+}
+
 export function validateConfig(cfg: unknown): RoutingConfig {
   const c = cfg as Partial<RoutingConfig>;
   const list = (v: unknown, name: string) => {
@@ -49,5 +58,10 @@ export function validateConfig(cfg: unknown): RoutingConfig {
     db: { paths: list(c.db.paths, "db.paths"), explainCommand: typeof c.db.explainCommand === "string" ? c.db.explainCommand : undefined },
     dependencies: list(c.dependencies, "dependencies"),
     ignore: list(c.ignore ?? [], "ignore"),
+    frontendApp: {
+      start: typeof c.frontendApp?.start === "string" ? c.frontendApp.start : "",
+      url: typeof c.frontendApp?.url === "string" && c.frontendApp.url ? c.frontendApp.url : "http://localhost:3000",
+      testingScript: typeof c.frontendApp?.testingScript === "string" && c.frontendApp.testingScript ? c.frontendApp.testingScript : "frontend-user-testing-script.md",
+    },
   };
 }

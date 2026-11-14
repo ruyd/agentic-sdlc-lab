@@ -6,6 +6,12 @@
     "paths": ["migrations/**", "db/**", "**/*.sql", "prisma/**", "**/schema.prisma", "**/migrations/**"],
     "explainCommand": ""
   },
+  "frontendApp": {
+    "$comment": "For the synthetic user test: how CI starts the app, where it listens, and the script it follows. Without a start command or the script, the test is skipped and the routing summary says so.",
+    "start": "",
+    "url": "http://localhost:3000",
+    "testingScript": "frontend-user-testing-script.md"
+  },
   "dependencies": ["package.json", "package-lock.json", "**/package.json", "**/package-lock.json", ".npmrc"],
   "ignore": ["test/**", "tests/**", "**/*.test.*", "**/*.spec.*", "docs/**", "**/*.md"]
 }

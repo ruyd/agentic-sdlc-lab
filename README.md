@@ -49,6 +49,17 @@ reviews") lists exactly what each one checks.
 | Backend code | Performance: algorithmic cost, data structures, logic flow, caching and I/O, memory | `performance` | – |
 | Backend code or dependencies | Security: pinned versions, safety of every added/updated/downgraded package, code security | `security` | `scripts/deps-gate.ts`: exact versions only; new versions at least 7 days old and not deprecated (`deps-cooldown-waived` for urgent fixes) |
 
+| Frontend (components, styles) | UX designer: clarity, consistency, states, accessibility, responsive, forms | `ux` | – |
+| Frontend | Animations / motion designer: purpose, timing and easing, reduced motion, flashing, animation performance | `motion` | – |
+| Frontend, when the app can start in CI | Synthetic user: follows `frontend-user-testing-script.md` in a real browser, replacing the manual UI test pass | `usertest` | The app runs on a local URL only; pinned Playwright MCP |
+
+### Synthetic user testing
+Each frontend repo keeps a `frontend-user-testing-script.md` at its root (template:
+`docs/templates/frontend-user-testing-script.md`): journeys of exact actions and expected results, viewports, and
+test-only data. Set `frontendApp.start` (and `url` if not `http://localhost:3000`) in `context/review-routing.json`.
+On every frontend PR, CI starts the app, an agent follows the script in Chrome and reports every step with
+screenshots (uploaded as the `usertest-screenshots` artifact). A failure in a journey marked critical blocks the PR.
+
 Repos with a database can set `db.explainCommand` in their routing config: a command that prints query plans for the
 changed queries, which the DBA review reads.
 

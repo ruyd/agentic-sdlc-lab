@@ -242,20 +242,41 @@ jobs:
         with: { node-version: 22, cache: npm }
       - run: npm ci --ignore-scripts   # PR code: never run its install scripts
       - name: Context for the reviewer
+        id: ctx
         # Routing, the data-loss findings (never failing here: gates enforces them) and, for DBA, query plans from the
         # repo's own db.explainCommand when it has one.
         run: |
-          config="$(npx tsx scripts/review-routing.ts origin/${{ github.base_ref }} | sed -n 's/^config=//p')"
+          npx tsx scripts/review-routing.ts origin/${{ github.base_ref }} > runs-routing.out
+          config="$(sed -n 's/^config=//p' runs-routing.out)"
+          echo "config=$config" >> "$GITHUB_OUTPUT"
+          echo "app_url=$(sed -n 's/^app_url=//p' runs-routing.out)" >> "$GITHUB_OUTPUT"
+          echo "testing_script=$(sed -n 's/^testing_script=//p' runs-routing.out)" >> "$GITHUB_OUTPUT"
+          rm runs-routing.out
           DATA_LOSS_APPROVED=true npx tsx scripts/data-loss-gate.ts origin/${{ github.base_ref }} > /dev/null
           npx tsx scripts/deps-gate.ts origin/${{ github.base_ref }} > /dev/null 2>&1 || true   # report only; gates enforces
           cmd="$(jq -r '.db.explainCommand // ""' "$config")"
           if [ "${{ matrix.agent }}" = "dba" ] && [ -n "$cmd" ]; then bash -c "$cmd" > runs/query-plans.txt 2>&1 || echo "(explainCommand failed; see the log)" >> runs/query-plans.txt; fi
+      # Synthetic user test only: start the app locally, wait for it, and give the agent a browser. The Playwright MCP
+      # server is pinned (at least 7 days old, like every dependency) and uses the Chrome preinstalled on the runner.
+      - name: Start the app for the synthetic user
+        if: matrix.agent == 'usertest'
+        env:
+          CONFIG: ${{ steps.ctx.outputs.config }}
+          APP_URL: ${{ steps.ctx.outputs.app_url }}
+          PLAYWRIGHT_MCP: "@playwright/mcp@0.0.84"
+        run: |
+          start="$(jq -r '.frontendApp.start // ""' "$CONFIG")"
+          nohup bash -c "$start" > runs/app.log 2>&1 &
+          for i in $(seq 1 60); do curl -fsS -o /dev/null "$APP_URL" && break; sleep 2; done
+          curl -fsS -o /dev/null "$APP_URL" || { echo "::error::The app did not answer at $APP_URL within 2 minutes; see runs/app.log"; tail -40 runs/app.log; exit 1; }
+          jq -n --arg pkg "$PLAYWRIGHT_MCP" '{mcpServers: {playwright: {command: "npx", args: ["-y", $pkg, "--headless", "--isolated", "--browser", "chrome", "--output-dir", "runs"]}}}' > runs/mcp.json
       - uses: anthropics/claude-code-action@v1
         id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "github-actions[bot]"
           prompt: |
+            ${{ matrix.agent == 'usertest' && format('The app is running at {0}. Your testing script is {1} in the repo root. Use only that URL.', steps.ctx.outputs.app_url, steps.ctx.outputs.testing_script) || '' }}
             You are the ${{ matrix.agent }} specialist reviewer for PR #${{ github.event.pull_request.number }} in ${{ github.repository }}
             (round ${{ needs.gates.outputs.round }} of 2). Follow .claude/agents/${{ matrix.agent }}.md exactly (in a member repo,
             .agent-base/.claude/agents/${{ matrix.agent }}.md if the repo has no own copy), and the "Specialist reviews" section of
@@ -264,10 +285,12 @@ jobs:
             exactly `Blockers: N`. The workflow posts it; do not post comments yourself. Never edit code, approve or merge.
             Tool rules (anything else is denied): one command per Bash call; you may pipe into head, tail, grep or wc, but no
             `;`, `&&`, `$(...)`, heredocs or writes outside the allowed paths.
+          # The synthetic user walks a whole script in a browser, so it gets more turns than a diff review.
           claude_args: >-
-            --max-turns 15
+            --max-turns ${{ matrix.agent == 'usertest' && 60 || 15 }}
             --model sonnet
-            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(npm test:*),Bash(npm audit:*),Bash(npm view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Write(runs/${{ matrix.agent }}.md),Edit(runs/${{ matrix.agent }}.md),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*)"
+            ${{ matrix.agent == 'usertest' && '--mcp-config runs/mcp.json' || '' }}
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(npm test:*),Bash(npm audit:*),Bash(npm view:*),Bash(gh pr view:*),Bash(gh pr diff:*),Write(runs/${{ matrix.agent }}.md),Edit(runs/${{ matrix.agent }}.md),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(wc:*)${{ matrix.agent == 'usertest' && ',mcp__playwright' || '' }}"
       - name: Post or update the specialist comment
         if: steps.claude.outputs.execution_file != ''
         env:
@@ -281,6 +304,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.claude.outputs.execution_file
         with: { name: "${{ matrix.agent }}-execution", path: "${{ steps.claude.outputs.execution_file }}" }
+      - uses: actions/upload-artifact@v7
+        if: always() && matrix.agent == 'usertest'
+        with: { name: usertest-screenshots, path: "runs/*.png\nruns/app.log", if-no-files-found: ignore }
 
   senior:
     needs: gates
