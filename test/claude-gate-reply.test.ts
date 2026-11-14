@@ -107,7 +107,7 @@ function reply(labels: string[] | string | undefined): string {
   writeFileSync(gh, `#!/usr/bin/env bash\nwhile [ $# -gt 0 ]; do [ "$1" = "--body" ] && printf '%s' "$2" > "${out}"; shift; done\n`);
   chmodSync(gh, 0o755);
   execFileSync("bash", ["-e", "-c", gateScript()], {
-    env: { PATH: `${dir}:${process.env.PATH}`, NUM: "1", REPO: "o/r", ...(labels === undefined ? {} : { LABELS: typeof labels === "string" ? labels : JSON.stringify(labels) }) },
+    stdio: "pipe", env: { PATH: `${dir}:${process.env.PATH}`, NUM: "1", REPO: "o/r", ...(labels === undefined ? {} : { LABELS: typeof labels === "string" ? labels : JSON.stringify(labels) }) },
   });
   return readFileSync(out, "utf8");
 }
@@ -283,7 +283,7 @@ describe("claude job: scan again just before Claude reads the thread", () => {
     let status = 0;
     try {
       execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("rescan", "recheck")], {
-        cwd: scanner, env: { PATH: `${bin}:${process.env.PATH}`, KIND: kind, NUM: "1" }, stdio: "pipe",
+        cwd: scanner, env: { PATH: `${bin}:${process.env.PATH}`, KIND: kind, NUM: "1", GITHUB_WORKSPACE: ws }, stdio: "pipe",
       });
     } catch (e) {
       status = (e as { status: number }).status;
@@ -305,6 +305,11 @@ describe("claude job: scan again just before Claude reads the thread", () => {
   it("fails closed when the labels cannot be read or the scan blocks", () => {
     expect(rescan("issue", "fail").status).not.toBe(0);
     expect(rescan("issue", ["ready"], 1).status).not.toBe(0);
+  });
+
+  it("removes the scanner folder even when the scan fails", () => {
+    expect(rescan("issue", ["ready"], 1).scannerGone).toBe(true);
+    expect(rescan("issue", "fail").scannerGone).toBe(true);
   });
 });
 

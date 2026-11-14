@@ -37,7 +37,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts   # PR code: never run its install scripts
       - name: Input scan (PR title, body, comments, reviews)
         # Fails the required `gates` check, so the agents below never read flagged text. A maintainer can add
         # `scan-cleared` after reviewing it (never for secrets); that label re-runs this workflow.
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts   # PR code: never run its install scripts
       - run: npm run test:property
       - run: npm run mutation   # fails below the 80% break threshold in stryker.config.json
 
@@ -112,7 +112,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts   # PR code: never run its install scripts
       - uses: anthropics/claude-code-action@v1
         id: claude
         with:
@@ -163,7 +163,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts   # PR code: never run its install scripts
       - uses: anthropics/claude-code-action@v1
         id: claude
         with:
