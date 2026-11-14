@@ -21,7 +21,8 @@ Check:
    loaded whole where streaming fits, timeouts on outbound calls.
 
 Do not ask for micro-optimisations without evidence they matter; say what input size makes a finding real.
-Severity is defined in `.claude/agents/adversary.md`. A blocker here: unbounded cost or memory on a hot path for
+Severity is defined in `.claude/agents/adversary.md`: label every finding `blocker`, `follow-up` or `nit`,
+never any other word (no "Major", "Minor" or "Critical"). A blocker here: unbounded cost or memory on a hot path for
 realistic input, or a cache that can return wrong data.
 
 Write `runs/performance.md`: findings first (file, line, severity, input size where it matters, suggested fix), then

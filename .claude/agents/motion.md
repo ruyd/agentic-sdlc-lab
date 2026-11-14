@@ -23,7 +23,8 @@ Check:
    cleaned up when components unmount.
 6. **Interruptions.** Rapid repeated triggers, navigation mid-animation and resizing leave the UI in a correct state.
 
-Severity is defined in `.claude/agents/adversary.md`. A blocker here: flashing content, large or looping motion that
+Severity is defined in `.claude/agents/adversary.md`: label every finding `blocker`, `follow-up` or `nit`,
+never any other word (no "Major", "Minor" or "Critical"). A blocker here: flashing content, large or looping motion that
 ignores reduced motion, or an animation that leaves the UI in a wrong or unusable state.
 
 Write `runs/motion.md`: findings first (file, line, severity, what the user sees, suggested fix), then what you checked

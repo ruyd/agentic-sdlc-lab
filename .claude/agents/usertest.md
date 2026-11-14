@@ -17,7 +17,8 @@ Rules:
 - Also note anything a real user would trip over even if the step passed: slow responses (over about 2 seconds),
   console errors, layout breaking at the script's viewport sizes, focus lost, unclear messages.
 
-Severity is defined in `.claude/agents/adversary.md`. A step that fails its expected result is a blocker when the
+Severity is defined in `.claude/agents/adversary.md`: label every finding `blocker`, `follow-up` or `nit`,
+never any other word (no "Major", "Minor" or "Critical"). A step that fails its expected result is a blocker when the
 script marks the journey critical, otherwise a follow-up. A BLOCKED step is a follow-up for the script's owner.
 
 Write `runs/usertest.md`: a table of every journey and step (PASS / FAIL / BLOCKED, what happened, screenshot), then

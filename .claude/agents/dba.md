@@ -22,7 +22,8 @@ Check, in this order:
 5. **Integrity.** Foreign keys, unique constraints and NOT NULL where the domain needs them; money as integer minor units
    (context/rules.md).
 
-Severity is defined in `.claude/agents/adversary.md` (blocker / follow-up / nit). A blocker here: data can be lost or
+Severity is defined in `.claude/agents/adversary.md`: label every finding `blocker`, `follow-up` or `nit`,
+never any other word (no "Major", "Minor" or "Critical"). A blocker here: data can be lost or
 corrupted, a migration cannot deploy safely, or a query on a hot path is unbounded or unindexed on a large table.
 
 Write `runs/dba.md`: findings first (file, line, severity, why, suggested fix), then what you checked and found fine.
