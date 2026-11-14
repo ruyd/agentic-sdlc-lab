@@ -156,6 +156,8 @@ jobs:
           echo "flagged=$(jq 'index("prompt-injection") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
           echo "ready=$(jq 'index("ready") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
           echo "security=$(jq 'index("security") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
+          # The guard only credits label changes made after this moment to people.
+          echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: anthropics/claude-code-action@v1
         id: claude
         with:
@@ -189,18 +191,24 @@ jobs:
       - name: Agent cannot clear a flag
         if: always()
         run: |
-          labels="$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
-          # Who made the last change to each label. A change a person made (a maintainer acting while the agent ran)
+          # If the live labels cannot be read, act as if every label is gone: the restores below then put back what
+          # the issue had before the run (fail closed), and the step fails.
+          read_failed=0
+          labels="$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')" || { labels="[]"; read_failed=1; }
+          # Who made the last change to each label during this run. A change a person made (a maintainer acting while the agent ran)
           # is left alone; anything else is repaired. If the events cannot be read, or do not show the change yet
           # (the events API can lag), it is repaired too: fail closed.
           events="$(gh api "repos/$REPO/issues/$NUM/events" --paginate | jq -cs 'add // []')" || events="[]"
-          by_person() {  # by_person <label> <labeled|unlabeled>
-            jq -e --arg l "$1" --arg e "$2" '
-              map(select((.event == "labeled" or .event == "unlabeled") and (.label.name // "" | ascii_downcase) == $l))
+          by_person() {  # by_person <label> <labeled|unlabeled>: the last change to <label> since the run started
+            jq -e --arg l "$1" --arg e "$2" --arg since "$STARTED" '
+              map(select((.event == "labeled" or .event == "unlabeled")
+                         and (.label.name // "" | ascii_downcase) == $l
+                         and (.created_at // "") >= $since and $since != ""))
               | last | . != null and .event == $e and .actor.type == "User"' <<<"$events" >/dev/null
           }
           has() { jq -e --arg l "$1" 'index($l) != null' <<<"$labels" >/dev/null; }
-          bad=0
+          bad=$read_failed
+          [ "$read_failed" = 1 ] && echo "::error::could not read the labels after the agent run; restoring from before the run."
           # Every repair is attempted even if another fails, and the restores come first.
           fix() { gh issue edit "$NUM" "$@" || echo "::error::could not run: gh issue edit $*"; }
           for l in prompt-injection security; do
@@ -243,6 +251,7 @@ jobs:
           PRE_FLAGGED: ${{ steps.pre.outputs.flagged }}
           PRE_READY: ${{ steps.pre.outputs.ready }}
           PRE_SECURITY: ${{ steps.pre.outputs.security }}
+          STARTED: ${{ steps.pre.outputs.started }}
       - uses: actions/upload-artifact@v7
         if: always() && steps.claude.outputs.execution_file
         with: { name: intake-execution, path: "${{ steps.claude.outputs.execution_file }}" }

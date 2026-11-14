@@ -23,7 +23,7 @@ const STUB = `#!/usr/bin/env bash
 jqexpr=""; args=("$@")
 for ((i=0; i<\${#args[@]}; i++)); do [ "\${args[$i]}" = "--jq" ] && jqexpr="\${args[$((i+1))]}"; done
 case "$1 $2" in
-  "issue view"|"pr view") data="$VIEW_JSON" ;;
+  "issue view"|"pr view") [ -n "$VIEW_FAIL" ] && exit 1; data="$VIEW_JSON" ;;
   "issue edit"|"pr edit") echo "$*" >> "$EDIT_LOG"; [ -n "$EDIT_FAIL" ] && [[ "$*" == *"$EDIT_FAIL"* ]] && exit 1; exit 0 ;;
   api*) printf '%s\n' "$EVENTS_JSON"; [ -n "$EVENTS_FAIL" ] && exit 1; exit 0 ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
@@ -57,8 +57,12 @@ function run(marker: string, labels: string[], env: Record<string, string> = {},
 }
 
 const actor = (login: string) => ({ login, type: login.endsWith("[bot]") ? "Bot" : "User" });
-const labeled = (name: string, login: string) => ({ event: "labeled", label: { name }, actor: actor(login) });
-const unlabeled = (name: string, login: string) => ({ event: "unlabeled", label: { name }, actor: actor(login) });
+// Label events default to "during the agent run" (after STARTED below); pass BEFORE for history.
+const STARTED = "2026-11-13T12:00:00Z";
+const DURING = "2026-11-13T12:00:30Z";
+const BEFORE = "2026-11-13T11:00:00Z";
+const labeled = (name: string, login: string, created_at = DURING) => ({ event: "labeled", label: { name }, actor: actor(login), created_at });
+const unlabeled = (name: string, login: string, created_at = DURING) => ({ event: "unlabeled", label: { name }, actor: actor(login), created_at });
 const SCAN = "github-actions[bot]";
 const AGENT = "claude[bot]";
 
@@ -136,7 +140,7 @@ describe("intake: who set the flag", () => {
 });
 
 describe("intake: the agent cannot clear a flag", () => {
-  const guard = (labels: string[], env: Record<string, string>) => run("agent-guard", labels, env);
+  const guard = (labels: string[], env: Record<string, string>) => run("agent-guard", labels, { STARTED, ...env });
 
   it("restores prompt-injection if the agent removed it, and fails", () => {
     const r = guard(["bug", "ready"], { PRE_FLAGGED: "true", CLEARED: "false" });
@@ -248,6 +252,32 @@ describe("intake: the agent cannot clear a flag", () => {
       EVENTS_JSON: JSON.stringify([labeled("ready", AGENT), labeled("prompt-injection", AGENT)]) });
     expect(r.status).toBe(1);
     expect(r.edits).toContain("--remove-label ready");
+  });
+
+  it("credits only changes made during the run to people", () => {
+    // The agent flagged an issue a maintainer had marked ready earlier: ready goes.
+    const r1 = guard(["prompt-injection", "ready"], { PRE_FLAGGED: "false", PRE_READY: "true", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("ready", "maintainer", BEFORE), labeled("prompt-injection", AGENT)]) });
+    expect(r1.edits).toContain("--remove-label ready");
+    // The agent removed the flag; the only person event is an older removal: restore.
+    const r2 = guard(["bug"], { PRE_FLAGGED: "true", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("prompt-injection", AGENT, BEFORE), unlabeled("prompt-injection", "maintainer", BEFORE)]) });
+    expect(r2.edits).toContain("--add-label prompt-injection");
+    const r3 = guard(["bug"], { PRE_SECURITY: "true", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("security", SCAN, BEFORE), unlabeled("security", "maintainer", BEFORE)]) });
+    expect(r3.edits).toContain("--add-label security");
+  });
+
+  it("repairs from the pre-run snapshot when the live labels cannot be read", () => {
+    const r = guard(["bug"], { PRE_FLAGGED: "true", PRE_SECURITY: "true", CLEARED: "false", VIEW_FAIL: "1" });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--add-label prompt-injection");
+    expect(r.edits).toContain("--add-label security");
+  });
+
+  it("repairs when the run start time is missing", () => {
+    const r = guard(["bug"], { STARTED: "", PRE_FLAGGED: "true", CLEARED: "false", EVENTS_JSON: JSON.stringify([unlabeled("prompt-injection", "maintainer")]) });
+    expect(r.edits).toContain("--add-label prompt-injection");
   });
 
   it("is case-insensitive, like GitHub labels", () => {
