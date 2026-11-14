@@ -60,6 +60,10 @@ jobs:
           # Only a maintainer can add labels; the DBA review still judges the migration.
           DATA_LOSS_APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'data-loss-approved') }}
         run: npx tsx scripts/data-loss-gate.ts origin/${{ github.base_ref }} | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Dependency gate (pinned versions, new versions at least 7 days old, not deprecated)
+        env:
+          DEPS_COOLDOWN_WAIVED: ${{ contains(github.event.pull_request.labels.*.name, 'deps-cooldown-waived') }}
+        run: npx tsx scripts/deps-gate.ts origin/${{ github.base_ref }} | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Label risk tier
         # Dependabot and fork PRs get a read-only token, so they cannot be labeled.
         if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login != 'dependabot[bot]'
@@ -243,6 +247,7 @@ jobs:
         run: |
           config="$(npx tsx scripts/review-routing.ts origin/${{ github.base_ref }} | sed -n 's/^config=//p')"
           DATA_LOSS_APPROVED=true npx tsx scripts/data-loss-gate.ts origin/${{ github.base_ref }} > /dev/null
+          npx tsx scripts/deps-gate.ts origin/${{ github.base_ref }} > /dev/null 2>&1 || true   # report only; gates enforces
           cmd="$(jq -r '.db.explainCommand // ""' "$config")"
           if [ "${{ matrix.agent }}" = "dba" ] && [ -n "$cmd" ]; then bash -c "$cmd" > runs/query-plans.txt 2>&1 || echo "(explainCommand failed; see the log)" >> runs/query-plans.txt; fi
       - uses: anthropics/claude-code-action@v1

@@ -80,6 +80,15 @@ When you work on a change locally, apply the same checks before opening the PR.
   flow (early returns, repeated work, independent awaits run in sequence), I/O batching and caching (a cache needs a
   key, a bound and an expiry; one that can serve stale or another user's data is a blocker), unbounded memory.
   Findings say what input size makes them real; no micro-optimisations without evidence.
+- **Security** (`.claude/agents/security.md`; backend or dependency changes):
+  - *Pinned versions:* `scripts/deps-gate.ts` fails `gates` on any `package.json` dependency that is not an exact
+    version; `.npmrc` has `save-exact=true`, so `npm install <pkg>` pins. The review checks the lockfile matches
+    (registry URLs only, no hand-edited integrity).
+  - *Updated versions are safe:* the gate fails an added or changed version younger than 7 days or deprecated, unless
+    a maintainer adds `deps-cooldown-waived` (urgent fixes, reason in the PR body). The review then checks each changed
+    package: `npm audit`, new install scripts, maintainer or repository changes, typosquat names, transitive
+    dependency jumps, downgrades, licenses.
+  - *Changed code:* input validation at boundaries, no secrets in code or logs, no injection, authz on new endpoints.
 
 ## Working agreement
 - Keep PRs small: one issue, one PR, under ~300 changed lines.
