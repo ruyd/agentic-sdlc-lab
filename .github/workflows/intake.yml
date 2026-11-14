@@ -16,13 +16,13 @@ on:
     types: [opened, edited, reopened, labeled, unlabeled]
   issue_comment:
     types: [created, edited]
-# One queue per issue for issue and comment events. Every label event gets a group of its own: a maintainer's
-# `scan-cleared` or flag removal can never be replaced by a later comment, and the agent's own label changes never
-# replace a real pending run. Every step reads labels live, so these runs need no ordering.
+# Comments on an issue share one queue (a newer pending comment run may replace an older one: they do the same
+# work). Every issue event (opened, edited, reopened, labeled, unlabeled) gets a group of its own, so an edit, a
+# maintainer's `scan-cleared` or a flag removal is never replaced by a later comment. Every step reads labels live,
+# and the intake agent itself runs one at a time per issue (see the intake job), so these runs need no ordering.
 concurrency:
   group: >-
-    intake-${{ github.event.issue.number }}-${{
-      (github.event.action == 'labeled' || github.event.action == 'unlabeled') && github.run_id || 'main' }}
+    intake-${{ github.event.issue.number }}-${{ github.event_name == 'issue_comment' && 'comments' || github.run_id }}
   cancel-in-progress: false
 # `shell: bash` runs every step with -eo pipefail (the default for steps without it has no pipefail), so a failed
 # page of `gh api --paginate` fails the step instead of deciding from partial history. The tests use the same flags.
@@ -69,7 +69,7 @@ jobs:
           if [ "$flagged" = "true" ]; then
             # --paginate prints one JSON array per page; jq -s joins them, so issues with many events work too.
             scan_flag="$(gh api "repos/$REPO/issues/$NUM/events" --paginate | jq -s '
-              add
+              (add // [])
               | map(select((.label.name // "" | ascii_downcase) == "prompt-injection"))
               | (map(.event == "unlabeled" and .actor.type == "User") | rindex(true)) as $reset
               | (if $reset == null then . else .[($reset + 1):] end)
@@ -105,6 +105,10 @@ jobs:
           esac
         env:
           SECRET: ${{ steps.scan.outputs.secret }}
+      - name: Say that scan-cleared does not clear the intake agent's flag
+        if: github.event.action == 'labeled' && steps.before.outputs.was_flagged == 'true' && steps.before.outputs.scan_flag != 'true'
+        run: |
+          gh "$KIND" comment "$NUM" --body "\`scan-cleared\` clears only flags the input scan set. The \`prompt-injection\` flag on this thread was set by the intake agent or by a person: a maintainer reviews the text and removes \`prompt-injection\` to clear it."
       - name: Clear a scan flag when the text is fixed or a maintainer cleared it
         # Only a flag the scan set, and only by this deterministic step. A secret is never cleared this way.
         id: clear
@@ -189,7 +193,7 @@ jobs:
           # Who made the last change to each label. A change a person made (a maintainer acting while the agent ran)
           # is left alone; anything else is repaired. If the events cannot be read, or do not show the change yet
           # (the events API can lag), it is repaired too: fail closed.
-          events="$(gh api "repos/$REPO/issues/$NUM/events" --paginate | jq -cs 'add')" || events="[]"
+          events="$(gh api "repos/$REPO/issues/$NUM/events" --paginate | jq -cs 'add // []')" || events="[]"
           by_person() {  # by_person <label> <labeled|unlabeled>
             jq -e --arg l "$1" --arg e "$2" '
               map(select((.event == "labeled" or .event == "unlabeled") and (.label.name // "" | ascii_downcase) == $l))
@@ -202,12 +206,19 @@ jobs:
           for l in prompt-injection security; do
             pre="$PRE_FLAGGED"; [ "$l" = "security" ] && pre="$PRE_SECURITY"
             if [ "$pre" = "true" ] && ! has "$l" && ! by_person "$l" unlabeled; then
-              fix --add-label "$l" --remove-label ready
-              labels="$(jq -c --arg l "$l" '(. - ["ready"]) + [$l]' <<<"$labels")"
+              # A `ready` that was there before the run was a maintainer's or an earlier intake's decision: keep it.
+              if [ "$PRE_READY" = "true" ]; then fix --add-label "$l"; else fix --add-label "$l" --remove-label ready; fi
+              labels="$(jq -c --arg l "$l" --arg keep "$PRE_READY" 'if $keep == "true" then . + [$l] else (. - ["ready"]) + [$l] end' <<<"$labels")"
               echo "::error::$l was removed during the agent run, not by a person; restored it."
               bad=1
             fi
           done
+          if [ "$PRE_FLAGGED" != "true" ] && has prompt-injection && has ready && ! by_person ready labeled; then
+            fix --remove-label ready
+            echo "::error::the agent flagged the issue but left ready on it; removed ready."
+            labels="$(jq -c '. - ["ready"]' <<<"$labels")"
+            bad=1
+          fi
           if [ "$PRE_READY" != "true" ] && has ready && { has security || has prompt-injection; } && ! by_person ready labeled; then
             fix --remove-label ready
             echo "::error::ready was added to a flagged or security issue during the agent run, not by a person; removed it."

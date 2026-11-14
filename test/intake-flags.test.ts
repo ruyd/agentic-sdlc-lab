@@ -124,6 +124,12 @@ describe("intake: who set the flag", () => {
     expect(r.out.scan_flag).toBeUndefined();
   });
 
+  it("empty events output is not a scan flag and does not fail the step", () => {
+    const r = run("flag-source", ["prompt-injection"], { EVENTS_JSON: "" });
+    expect(r.status).toBe(0);
+    expect(r.out.scan_flag).toBe("false");
+  });
+
   it("a flag with no labeling event on record is not treated as a scan flag", () => {
     expect(source(["prompt-injection"], []).scan_flag).toBe("false");
   });
@@ -227,6 +233,21 @@ describe("intake: the agent cannot clear a flag", () => {
     expect(r.status).toBe(1);
     expect(r.edits).toContain("--add-label scan-cleared");
     expect(guard(["prompt-injection"], { PRE_FLAGGED: "true", CLEARED: "true", EVENTS_JSON: JSON.stringify([unlabeled("scan-cleared", "maintainer")]) })).toMatchObject({ status: 0, edits: "" });
+  });
+
+  it("keeps a ready that was there before the run when it restores a label", () => {
+    const r = guard(["bug", "ready"], { PRE_SECURITY: "true", PRE_READY: "true", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("security", "maintainer"), labeled("ready", "maintainer"), unlabeled("security", AGENT)]) });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--add-label security");
+    expect(r.edits).not.toContain("--remove-label ready");
+  });
+
+  it("removes ready when the agent flagged the issue but left ready on it", () => {
+    const r = guard(["prompt-injection", "ready"], { PRE_FLAGGED: "false", PRE_READY: "true", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("ready", AGENT), labeled("prompt-injection", AGENT)]) });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--remove-label ready");
   });
 
   it("is case-insensitive, like GitHub labels", () => {
