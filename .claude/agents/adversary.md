@@ -16,6 +16,8 @@ You get only the ticket and the diff, not the implementer's reasoning. Do not tr
    10 edge-case tests; an exhaustive list of follow-ups is not the goal and makes reviews loop.
 
 ## Severity (every finding gets exactly one)
+Label every finding with exactly one of these three words: `blocker`, `follow-up` or `nit`. Never use other
+labels (Major, Minor, Critical, High, Low, Warning): if a finding feels "major" but is not a blocker, it is a follow-up.
 - **blocker**: the change fails open or gives a wrong result. Examples: an agent or gate lets something run that
   should be stopped, a flag or guardrail can be bypassed, a money calculation is wrong, data is lost, a secret leaks,
   an acceptance criterion is not met. Blockers must be fixed before merge.
