@@ -8,8 +8,10 @@
 //   git worktree add ../lab-task-1 -b agent/task-1 && cd ../lab-task-1 && npm ci && npm run orchestrate -- "..."
 import { z } from "zod";
 import { extractJson, runAgent } from "./lib/run-agent.js";
+import { MAX_ROUNDS } from "../scripts/lib/review-loop.js";
 
-const MAX_REVIEW_ROUNDS = 3;
+// Same limit as CI (scripts/lib/review-loop.ts), so a local run and a PR stop at the same point.
+const MAX_REVIEW_ROUNDS = MAX_ROUNDS;
 
 const Outcome = z.object({
   status: z.enum(["pr_ready", "needs_info", "escalated", "gave_up"]),
@@ -31,8 +33,11 @@ Stop at the first gate that fails, and escalate whenever any agent reports low c
 3. FIX: give the plan to the "implementer" agent. It must show a red test failing before the fix.
    No red test, or still failing after its iterations: status "gave_up"; stop.
 4. REVIEW: run the "reviewer" and "adversary" agents (the adversary gets only the ticket and the diff, not the plan's reasoning).
-   Send every blocker, failing adversarial case and plan mismatch back to the implementer, then review again.
-   Reviewer "escalate": status "escalated". Still failing after ${MAX_REVIEW_ROUNDS} rounds: status "gave_up".
+   Each finding is tagged blocker, follow-up or nit (see .claude/agents/reviewer.md and adversary.md). Send ONLY
+   blockers and plan mismatches back to the implementer, then review again. Follow-ups and nits never cause another
+   round: list them in the PR body under "What I did not test" as proposed issues.
+   Reviewer "escalate": status "escalated". Blockers left after ${MAX_REVIEW_ROUNDS} rounds: status "gave_up".
+   If a fix would add a new mechanism, or grow the change past the size budget, stop and escalate instead.
 5. PR: write pr-body.md following .github/pull_request_template.md, filling every section honestly from the agents'
    outputs: plan, risk tier, what was tested, what was NOT tested, assumptions, evidence (red test output, results).
    Status "pr_ready". Do not commit, push, open the PR, merge or release: a human does that.

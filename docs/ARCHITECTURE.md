@@ -62,6 +62,7 @@ every workflow.
 | Tests too weak to catch a wrong change | Mutation testing (break at 80%) | PR blocked for high risk |
 | Change in money / auth / deletion code | Risk tier `high` | Senior Code Owner approval + stricter checks |
 | Prompt injection | Input scan (intake, `@claude`, PR `gates`) + intake agent + eval critical cases | Agents paused; `gates` fails; maintainer reviews |
+| Endless review loop (every round finds new edge cases, the PR grows) | `scripts/review-loop.ts`: 2-round budget, blocker-only failure, 300-line size budget, one sticky comment per agent | Agents stop and post a note; follow-ups become issues; a maintainer adds `review-again` or `large-pr` |
 | Secret pasted in an issue or PR | Input scan `secret` rule | Labeled `security`; reporter told to rotate; cannot be cleared |
 | Agent unsure | Confidence field | Escalate to a human |
 | Defect reaches main | `escaped-defect` label | Learning loop: test + eval + lesson |
