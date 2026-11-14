@@ -37,6 +37,20 @@ Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/release.md](docs/re
 6. **After merge:** release stays human, behind feature flags or a canary, with a one-command revert ([docs/release.md](docs/release.md)).
 7. **Learning loop:** every escaped defect becomes a regression test, an eval case if an agent missed it, and a row in `context/lessons.md` that every planner reads.
 
+## Code Group Improvement Layer
+Specialist agent reviews that every repository in the group gets, routed by what a PR touches
+(`context/review-routing.json`, overridable per member repo). They run in `claude-review.yml` after `gates`, share
+the 2-round review budget, keep one comment each, and fail their check only on blockers. `CLAUDE.md` ("Specialist
+reviews") lists exactly what each one checks.
+
+| Change | Review | Agent | Deterministic gate |
+|---|---|---|---|
+| Database files (migrations, schema, SQL) | DBA: data loss, locking and rollout, query plans, indexing, integrity | `dba` | `scripts/data-loss-gate.ts`: destructive statements need `data-loss-approved` |
+| Backend code | Performance: algorithmic cost, data structures, logic flow, caching and I/O, memory | `performance` | – |
+
+Repos with a database can set `db.explainCommand` in their routing config: a command that prints query plans for the
+changed queries, which the DBA review reads.
+
 ## Run it locally
 
 ```bash

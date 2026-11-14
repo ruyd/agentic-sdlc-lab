@@ -7,7 +7,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import {
-  MAX_CHANGED_LINES, budget, budgetNote, countedLines, findSticky, parseBlockers, stickyBody, type Agent, type Comment,
+  MAX_CHANGED_LINES, budget, budgetNote, countedLines, findSticky, isReviewer, parseBlockers, stickyBody, type Agent, type Comment,
 } from "./lib/review-loop.js";
 
 const [cmd, ...args] = process.argv.slice(2);
@@ -45,9 +45,9 @@ switch (cmd) {
     break;
   }
   case "post": {
-    need(4, "post <pr> <review|adversary> <file> <round>");
+    need(4, "post <pr> <reviewer> <file> <round>");
     const [pr, agent, file, round] = args as [string, Agent, string, string];
-    if (agent !== "review" && agent !== "adversary") { console.error(`unknown agent: ${agent}`); process.exit(2); }
+    if (!isReviewer(agent)) { console.error(`unknown agent: ${agent}`); process.exit(2); }
     upsert(pr, agent, stickyBody(agent, Number(round), readFileSync(file, "utf8")));
     break;
   }

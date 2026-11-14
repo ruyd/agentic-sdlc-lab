@@ -31,6 +31,11 @@ describe("round budget", () => {
     expect(roundsDone([c(bot, stickyBody("review", 2, "x")), c("someone", marker("review", 0))])).toBe(2);
   });
 
+  it("counts specialist reviews in the same budget", () => {
+    expect(roundsDone([c(bot, stickyBody("review", 1, "x")), c(bot, stickyBody("dba", 2, "y"))])).toBe(2);
+    expect(stickyBody("performance", 1, "r")).toContain("Performance review: round 1 of 2");
+  });
+
   it("ignores the budget note when counting rounds", () => {
     expect(roundsDone([c(bot, stickyBody("budget", 7, "note"))])).toBe(0);
   });
