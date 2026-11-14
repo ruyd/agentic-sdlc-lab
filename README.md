@@ -67,6 +67,7 @@ Auth: your local Claude Code login works; CI uses the `CLAUDE_CODE_OAUTH_TOKEN` 
 - **Audit log:** a hook appends every tool call to `runs/audit.jsonl`; CI uploads it as an artifact.
 - **Untrusted input scan:** before any agent reads an issue or PR, `scripts/scan-untrusted.ts` checks titles, bodies, comments and reviews for prompt injection (including hidden HTML comments, base64, Unicode tag and zero-width tricks), exfiltration attempts and pasted secrets. Findings pause the agents and fail the PR `gates` check; only a maintainer's `scan-cleared` label resumes them, and never for secrets.
 - **Escalation:** every agent reports a confidence; low confidence or a rules conflict stops the pipeline and asks a human.
+- **Review loop limits:** agents review a PR at most 2 rounds (a maintainer's `review-again` label adds one), each agent keeps one comment that is edited in place (no notification per push), only blockers fail the adversary check, and `gates` fails over 300 changed lines outside tests and docs unless a maintainer adds `large-pr`. See "Review loop limits" in `CLAUDE.md`.
 
 ## GitHub setup checklist
 
