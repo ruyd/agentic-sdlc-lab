@@ -201,6 +201,34 @@ describe("intake: the agent cannot clear a flag", () => {
     expect(guard(["scan-cleared"], { PRE_FLAGGED: "false", CLEARED: "false", EVENTS_FAIL: "1" }).edits).toContain("--remove-label scan-cleared");
   });
 
+  it("keeps changes a maintainer made while the agent ran", () => {
+    const ev = (...e: unknown[]) => ({ EVENTS_JSON: JSON.stringify(e) });
+    // Removed security and added ready.
+    expect(guard(["bug", "ready"], { PRE_SECURITY: "true", PRE_READY: "false", CLEARED: "false",
+      ...ev(labeled("security", AGENT), unlabeled("security", "maintainer"), labeled("ready", "maintainer")) })).toMatchObject({ status: 0, edits: "" });
+    // Removed the agent's flag.
+    expect(guard(["bug"], { PRE_FLAGGED: "true", CLEARED: "false",
+      ...ev(labeled("prompt-injection", AGENT), unlabeled("prompt-injection", "maintainer")) })).toMatchObject({ status: 0, edits: "" });
+    // Added ready to a reviewed security issue.
+    expect(guard(["security", "ready"], { PRE_SECURITY: "true", PRE_READY: "false", CLEARED: "false",
+      ...ev(labeled("security", AGENT), labeled("ready", "maintainer")) })).toMatchObject({ status: 0, edits: "" });
+  });
+
+  it("still repairs when the last change was the agent's, or the events lag behind", () => {
+    const agentRemoved = JSON.stringify([labeled("prompt-injection", "maintainer"), unlabeled("prompt-injection", AGENT)]);
+    expect(guard(["bug"], { PRE_FLAGGED: "true", CLEARED: "false", EVENTS_JSON: agentRemoved }).edits).toContain("--add-label prompt-injection");
+    // The events show the maintainer's earlier labeling, not the removal yet: repair.
+    const lagging = JSON.stringify([labeled("prompt-injection", "maintainer")]);
+    expect(guard(["bug"], { PRE_FLAGGED: "true", CLEARED: "false", EVENTS_JSON: lagging }).edits).toContain("--add-label prompt-injection");
+  });
+
+  it("restores a maintainer's scan-cleared if the agent removed it", () => {
+    const r = guard(["prompt-injection"], { PRE_FLAGGED: "true", CLEARED: "true", EVENTS_JSON: JSON.stringify([labeled("scan-cleared", "maintainer"), unlabeled("scan-cleared", AGENT)]) });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--add-label scan-cleared");
+    expect(guard(["prompt-injection"], { PRE_FLAGGED: "true", CLEARED: "true", EVENTS_JSON: JSON.stringify([unlabeled("scan-cleared", "maintainer")]) })).toMatchObject({ status: 0, edits: "" });
+  });
+
   it("is case-insensitive, like GitHub labels", () => {
     expect(guard(["Prompt-Injection"], { PRE_FLAGGED: "true", CLEARED: "false" }).status).toBe(0);
     expect(guard(["Scan-Cleared"], { PRE_FLAGGED: "false", CLEARED: "false" }).status).toBe(1);

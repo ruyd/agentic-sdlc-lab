@@ -38,7 +38,7 @@ function invoked(body: string, state = "open", where: "issue" | "pull_request" =
 
 describe("@claude invocation", () => {
   it("counts a comment whose first non-blank line starts with @claude", () => {
-    for (const body of ["@claude fix this", "  @claude please", "   @claude max indent", "\n\n@claude after blank lines", "\r\n@claude go", "@claude", "@claude\r\nand more", "@claude, plan it", "@claude: plan it", "@claude\tfix", "@Claude fix this", "@CLAUDE go"]) {
+    for (const body of ["@claude fix this", "  @claude please", "   @claude max indent", "\n\n@claude after blank lines", "\r\n@claude go", "@claude", "@claude\r\nand more", "@claude, plan it", "@claude: plan it", "@claude\tfix", "@Claude fix this", "@CLAUDE go", "@claude\u00a0fix this"]) {
       expect(invoked(body), body).toBe(true);
     }
   });

@@ -46,7 +46,8 @@ jobs:
           # Read from the event file, not env: a maximum-size comment (64K characters of emoji) is larger than an
           # environment variable may be.
           state="$(jq -r '(.issue.state // .pull_request.state // "") | ascii_downcase' "$GITHUB_EVENT_PATH")"
-          first="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH" | tr -d '\r' | grep -m1 -v '^[[:space:]]*$' || true)"
+          # A no-break space (U+00A0, e.g. macOS Option-Space) counts as a space.
+          first="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH" | tr -d '\r' | perl -pe 's/\xC2\xA0/ /g' | grep -m1 -v '^[[:space:]]*$' || true)"
           if [ "$state" = "open" ] && grep -qiE '^ {0,3}@claude([[:space:],:]|$)' <<<"$first"; then
             echo "invoked=true" >> "$GITHUB_OUTPUT"
           else
@@ -87,14 +88,14 @@ jobs:
         run: |
           add="prompt-injection"
           if [ "$SECRET" = "true" ]; then add="$add,security"; fi
-          gh "$KIND" edit "$NUM" --add-label "$add" --remove-label ready
+          if [ "$KIND" = "issue" ]; then gh issue edit "$NUM" --add-label "$add" --remove-label ready; else gh pr edit "$NUM" --add-label "$add"; fi
           {
             echo "@claude did not run."
             echo
             cat runs/scan-report.md
-            if [ "$KIND" = "issue" ] && [ "$SECRET" = "true" ]; then
+            if [ "$SECRET" = "true" ]; then
               echo
-              echo "Rotate the leaked secret now and delete the text. Intake will not add \`ready\` to a \`security\` issue: a maintainer adds it once it is safe, then mentions @claude again."
+              echo "Rotate the leaked secret now and delete the text. A maintainer decides when work can resume (intake will not add \`ready\` to a \`security\` issue), then mentions @claude again."
             elif [ "$KIND" = "issue" ]; then
               echo
               echo "Once the flag is cleared, intake checks the issue again and adds \`ready\` if it is complete. Then mention @claude again."
