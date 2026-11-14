@@ -31,7 +31,7 @@ jobs:
     # Of label events, only `scan-cleared` added, or `prompt-injection` removed by a person, matter.
     if: |
       (github.event_name == 'issues'
-        && (github.event.action != 'labeled' || github.event.label.name == 'scan-cleared')
+        && (github.event.action != 'labeled' || (github.event.label.name == 'scan-cleared' && github.event.sender.type == 'User'))
         && (github.event.action != 'unlabeled' || (github.event.label.name == 'prompt-injection' && github.event.sender.type == 'User')))
       || (github.event_name == 'issue_comment' && github.event.comment.user.login != 'github-actions[bot]' && github.event.comment.user.login != 'claude[bot]')
     runs-on: ubuntu-latest
@@ -54,18 +54,24 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
-      # flag-source: is the thread flagged, and did the scan set that flag? Tested by test/claude-gate-reply.test.ts.
+      # flag-source: a flag counts as the scan's only if nobody but the scan (github-actions[bot]) has labeled
+      # `prompt-injection` since a person last removed it. The scan re-adding or the guard restoring a label never
+      # makes an agent's or a person's flag the scan's. Tested by test/intake-flags.test.ts.
       - name: Who set the current flag?
         id: before
         run: |
           flagged="$(gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase] | index("prompt-injection") != null')"
-          by=""
-          if [ "$flagged" = "true" ]; then
-            by="$(gh api "repos/$REPO/issues/$NUM/events" --paginate \
-              --jq '[.[] | select(.event == "labeled" and (.label.name | ascii_downcase) == "prompt-injection")] | last | .actor.login // empty' | tail -n 1)"
-          fi
           scan_flag=false
-          if [ "$flagged" = "true" ] && [ "$by" = "github-actions[bot]" ]; then scan_flag=true; fi
+          if [ "$flagged" = "true" ]; then
+            # --paginate prints one JSON array per page; jq -s joins them, so issues with many events work too.
+            scan_flag="$(gh api "repos/$REPO/issues/$NUM/events" --paginate | jq -s '
+              add
+              | map(select((.label.name // "" | ascii_downcase) == "prompt-injection"))
+              | (map(.event == "unlabeled" and .actor.type == "User") | rindex(true)) as $reset
+              | (if $reset == null then . else .[($reset + 1):] end)
+              | map(select(.event == "labeled")) as $set
+              | ($set | length) > 0 and all($set[]; .actor.login == "github-actions[bot]")')"
+          fi
           echo "was_flagged=$flagged" >> "$GITHUB_OUTPUT"
           echo "scan_flag=$scan_flag" >> "$GITHUB_OUTPUT"
         env:
@@ -131,7 +137,9 @@ jobs:
       - name: Labels before the agent runs
         id: pre
         run: |
-          echo "flagged=$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase] | index("prompt-injection") != null')" >> "$GITHUB_OUTPUT"
+          labels="$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
+          echo "flagged=$(jq 'index("prompt-injection") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
+          echo "ready=$(jq 'index("ready") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
       - uses: anthropics/claude-code-action@v1
         id: claude
         with:
@@ -158,7 +166,8 @@ jobs:
             --max-turns 8
             --model haiku
             --allowedTools "Read,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*)"
-      # agent-guard: `scan-cleared` and removing `prompt-injection` are maintainer decisions. Undo either and fail.
+      # agent-guard: `scan-cleared`, removing `prompt-injection`, and `ready` on a `security` issue are maintainer
+      # decisions. Undo any of them and fail.
       # Tested by test/claude-gate-reply.test.ts.
       - name: Agent cannot clear a flag
         if: always()
@@ -175,10 +184,16 @@ jobs:
             echo "::error::prompt-injection was removed during the agent run; restored it."
             bad=1
           fi
+          if [ "$PRE_READY" != "true" ] && jq -e 'index("security") != null and index("ready") != null' <<<"$labels" >/dev/null; then
+            gh issue edit "$NUM" --remove-label ready
+            echo "::error::ready was added to a security issue during the agent run; removed it."
+            bad=1
+          fi
           exit "$bad"
         env:
           CLEARED: ${{ needs.scan.outputs.cleared }}
           PRE_FLAGGED: ${{ steps.pre.outputs.flagged }}
+          PRE_READY: ${{ steps.pre.outputs.ready }}
       - uses: actions/upload-artifact@v7
         if: always() && steps.claude.outputs.execution_file
         with: { name: intake-execution, path: "${{ steps.claude.outputs.execution_file }}" }

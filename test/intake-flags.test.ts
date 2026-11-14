@@ -12,7 +12,8 @@ function stepScript(marker: string): string {
   const lines = readFileSync(WORKFLOW, "utf8").split("\n");
   const at = lines.findIndex((l) => l.includes(`# ${marker}:`));
   const run = lines.findIndex((l, i) => i > at && /^-?\s*run: \|$/.test(l.trim()));
-  const end = lines.findIndex((l, i) => i > run && l.trim() === "env:");
+  // The block ends at the first non-blank line indented less than its content (the next key or step).
+  const end = lines.findIndex((l, i) => i > run && l.trim() !== "" && !l.startsWith(" ".repeat(10)));
   if (at < 0 || run < 0 || end < 0) throw new Error(`${marker} step not found`);
   return lines.slice(run + 1, end).map((l) => l.replace(/^ {10}/, "")).join("\n");
 }
@@ -55,29 +56,58 @@ function run(marker: string, labels: string[], env: Record<string, string> = {},
   return { out: Object.fromEntries(kv), edits: readFileSync(log, "utf8"), status };
 }
 
-const labeled = (name: string, login: string) => ({ event: "labeled", label: { name }, actor: { login } });
-const unlabeled = (name: string, login: string) => ({ event: "unlabeled", label: { name }, actor: { login } });
+const actor = (login: string) => ({ login, type: login.endsWith("[bot]") ? "Bot" : "User" });
+const labeled = (name: string, login: string) => ({ event: "labeled", label: { name }, actor: actor(login) });
+const unlabeled = (name: string, login: string) => ({ event: "unlabeled", label: { name }, actor: actor(login) });
+const SCAN = "github-actions[bot]";
+const AGENT = "claude[bot]";
 
 describe("intake: who set the flag", () => {
-  const source = (labels: string[], events: unknown[]) => run("flag-source", labels, {}, events).out;
+  // `pages` splits the events the way `gh api --paginate` prints them: one JSON array per page.
+  const source = (labels: string[], events: unknown[], pages = 1) => {
+    const size = Math.ceil(events.length / pages) || 1;
+    const chunks = Array.from({ length: pages }, (_, i) => JSON.stringify(events.slice(i * size, (i + 1) * size)));
+    return run("flag-source", labels, { EVENTS_JSON: chunks.join("\n") }).out;
+  };
 
   it("a flag the scan set is a scan flag", () => {
-    expect(source(["prompt-injection"], [labeled("prompt-injection", "github-actions[bot]")])).toEqual({ was_flagged: "true", scan_flag: "true" });
+    expect(source(["prompt-injection"], [labeled("prompt-injection", SCAN)])).toEqual({ was_flagged: "true", scan_flag: "true" });
   });
 
   it("a flag the intake agent or a person set is not, so new comments cannot clear it", () => {
-    expect(source(["prompt-injection"], [labeled("prompt-injection", "claude[bot]")]).scan_flag).toBe("false");
+    expect(source(["prompt-injection"], [labeled("prompt-injection", AGENT)]).scan_flag).toBe("false");
     expect(source(["prompt-injection"], [labeled("prompt-injection", "someone")]).scan_flag).toBe("false");
   });
 
-  it("only the most recent labeling counts", () => {
-    const events = [labeled("prompt-injection", "github-actions[bot]"), unlabeled("prompt-injection", "github-actions[bot]"), labeled("bug", "claude[bot]"), labeled("prompt-injection", "claude[bot]")];
+  it("the guard restoring an agent's flag does not make it the scan's", () => {
+    const events = [labeled("prompt-injection", AGENT), unlabeled("prompt-injection", AGENT), labeled("prompt-injection", SCAN)];
     expect(source(["prompt-injection"], events).scan_flag).toBe("false");
-    expect(source(["prompt-injection"], events.slice(0, 3).concat([labeled("Prompt-Injection", "github-actions[bot]")])).scan_flag).toBe("true");
+  });
+
+  it("the scan re-flagging an agent's flag does not make it the scan's", () => {
+    expect(source(["prompt-injection"], [labeled("prompt-injection", AGENT), labeled("prompt-injection", SCAN)]).scan_flag).toBe("false");
+  });
+
+  it("a person removing the flag starts a new history", () => {
+    const events = [labeled("prompt-injection", AGENT), unlabeled("prompt-injection", "maintainer"), labeled("Prompt-Injection", SCAN)];
+    expect(source(["prompt-injection"], events).scan_flag).toBe("true");
+  });
+
+  it("the scan clearing its own flag does not start a new history", () => {
+    const events = [labeled("prompt-injection", AGENT), unlabeled("prompt-injection", SCAN), labeled("prompt-injection", SCAN)];
+    expect(source(["prompt-injection"], events).scan_flag).toBe("false");
+  });
+
+  it("reads every page of events", () => {
+    const filler = Array.from({ length: 70 }, () => labeled("bug", AGENT));
+    const events = [labeled("prompt-injection", AGENT), ...filler, labeled("prompt-injection", SCAN)];
+    expect(source(["prompt-injection"], events, 3).scan_flag).toBe("false");
+    const clean = [...filler, labeled("prompt-injection", SCAN)];
+    expect(source(["prompt-injection"], clean, 3).scan_flag).toBe("true");
   });
 
   it("no label means no flag, whatever the history says", () => {
-    expect(source(["bug"], [labeled("prompt-injection", "github-actions[bot]")])).toEqual({ was_flagged: "false", scan_flag: "false" });
+    expect(source(["bug"], [labeled("prompt-injection", SCAN)])).toEqual({ was_flagged: "false", scan_flag: "false" });
   });
 
   it("a flag with no labeling event on record is not treated as a scan flag", () => {
@@ -105,6 +135,16 @@ describe("intake: the agent cannot clear a flag", () => {
     expect(guard(["scan-cleared", "ready"], { PRE_FLAGGED: "false", CLEARED: "true" })).toMatchObject({ status: 0, edits: "" });
     expect(guard(["prompt-injection"], { PRE_FLAGGED: "true", CLEARED: "false" })).toMatchObject({ status: 0, edits: "" });
     expect(guard(["prompt-injection"], { PRE_FLAGGED: "false", CLEARED: "false" })).toMatchObject({ status: 0, edits: "" });
+  });
+
+  it("removes ready the agent added to a security issue, and fails", () => {
+    const r = guard(["security", "ready"], { PRE_FLAGGED: "false", PRE_READY: "false", CLEARED: "false" });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--remove-label ready");
+  });
+
+  it("leaves ready on a security issue that a maintainer had already marked ready", () => {
+    expect(guard(["security", "ready"], { PRE_FLAGGED: "false", PRE_READY: "true", CLEARED: "false" })).toMatchObject({ status: 0, edits: "" });
   });
 
   it("is case-insensitive, like GitHub labels", () => {

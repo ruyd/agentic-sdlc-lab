@@ -13,7 +13,8 @@ function stepScript(marker: string, mustContain: string): string {
   const lines = readFileSync(WORKFLOW, "utf8").split("\n");
   const at = lines.findIndex((l) => l.includes(`# ${marker}:`));
   const run = lines.findIndex((l, i) => i > at && /^-?\s*run: \|$/.test(l.trim()));
-  const end = lines.findIndex((l, i) => i > run && l.trim() === "env:");
+  // The block ends at the first non-blank line indented less than its content (the next key or step).
+  const end = lines.findIndex((l, i) => i > run && l.trim() !== "" && !l.startsWith(" ".repeat(10)));
   if (at < 0 || run < 0 || end < 0) throw new Error(`${marker} step not found`);
   const script = lines.slice(run + 1, end).map((l) => l.replace(/^ {10}/, "")).join("\n");
   if (!script.includes(mustContain)) throw new Error(`${marker} step extracted without ${mustContain}`);
@@ -21,12 +22,14 @@ function stepScript(marker: string, mustContain: string): string {
 }
 const gateScript = () => stepScript("gate-reply", "gh issue comment");
 
-function invoked(body: string, state = "open"): boolean {
+function invoked(body: string, state = "open", where: "issue" | "pull_request" = "issue"): boolean {
   const dir = mkdtempSync(join(tmpdir(), "invoke-"));
   const out = join(dir, "out");
+  const event = join(dir, "event.json");
   writeFileSync(out, "");
+  writeFileSync(event, JSON.stringify({ comment: { body }, [where]: state === "" ? {} : { state } }));
   execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("invocation", "invoked=")], {
-    env: { PATH: process.env.PATH, BODY: body, STATE: state, GITHUB_OUTPUT: out },
+    env: { PATH: process.env.PATH, GITHUB_OUTPUT: out, GITHUB_EVENT_PATH: event },
   });
   const value = readFileSync(out, "utf8").trim();
   if (value !== "invoked=true" && value !== "invoked=false") throw new Error(`unexpected output: ${value}`);
@@ -74,6 +77,13 @@ describe("@claude invocation", () => {
     expect(invoked("@claude fix this", "open")).toBe(true);
     expect(invoked("@claude fix this", "OPEN")).toBe(true);
     for (const state of ["closed", "CLOSED", "", "merged"]) expect(invoked("@claude fix this", state), state).toBe(false);
+    expect(invoked("@claude fix this", "open", "pull_request")).toBe(true);
+    expect(invoked("@claude fix this", "closed", "pull_request")).toBe(false);
+  });
+
+  it("handles a maximum-size comment (64K characters of emoji)", () => {
+    expect(invoked("@claude fix this\n" + "\u{1F600}".repeat(65_516))).toBe(true);
+    expect(invoked("hello\n" + "\u{1F600}".repeat(65_516))).toBe(false);
   });
 
   it("does not run shell in the comment body", () => {

@@ -38,16 +38,15 @@ jobs:
       # Tested by test/claude-gate-reply.test.ts.
       - id: invoke
         run: |
-          state="$(printf '%s' "${STATE:-}" | tr '[:upper:]' '[:lower:]')"
-          first="$(printf '%s\n' "${BODY:-}" | tr -d '\r' | grep -m1 -v '^[[:space:]]*$' || true)"
+          # Read from the event file, not env: a maximum-size comment (64K characters of emoji) is larger than an
+          # environment variable may be.
+          state="$(jq -r '(.issue.state // .pull_request.state // "") | ascii_downcase' "$GITHUB_EVENT_PATH")"
+          first="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH" | tr -d '\r' | grep -m1 -v '^[[:space:]]*$' || true)"
           if [ "$state" = "open" ] && grep -qiE '^ {0,3}@claude([[:space:],:]|$)' <<<"$first"; then
             echo "invoked=true" >> "$GITHUB_OUTPUT"
           else
             echo "invoked=false" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          BODY: ${{ github.event.comment.body }}
-          STATE: ${{ github.event.issue.state || github.event.pull_request.state }}
       # The scanner always comes from the default branch, so a PR cannot change the scan that gates its own thread.
       - if: steps.invoke.outputs.invoked == 'true'
         uses: actions/checkout@v7
@@ -60,9 +59,6 @@ jobs:
       - id: scan
         if: steps.invoke.outputs.invoked == 'true'
         run: npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM"
-        env:
-          # The triggering comment, in case the API read above does not include it yet.
-          EXTRA_TEXT: ${{ github.event.comment.body }}
       # live-labels: tested by test/claude-gate-reply.test.ts.
       - name: Read labels live and add what the scan just found
         id: labels
@@ -149,7 +145,8 @@ jobs:
           FLAGGED: ${{ steps.labels.outputs.flagged }}
           READY: ${{ steps.labels.outputs.ready }}
       - name: The gate itself failed - say so instead of staying silent
-        if: failure() && steps.invoke.outputs.invoked == 'true'
+        # Also when the invocation check itself failed: then nobody knows whether it was a call, so say so.
+        if: failure() && steps.invoke.outputs.invoked != 'false'
         run: |
           gh "$KIND" comment "$NUM" --body "@claude did not run: the gate check failed before it could decide. A maintainer can look at the run: $RUN_URL"
         env:
@@ -171,6 +168,23 @@ jobs:
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      # Scan again right before Claude reads the thread, so a comment posted after the gate decided is not read
+      # unscanned. The scanner comes from the default branch, in its own folder.
+      - uses: actions/checkout@v7
+        with: { ref: "${{ github.event.repository.default_branch }}", path: .scanner }
+      - name: Scan again just before Claude reads the thread
+        working-directory: .scanner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
+          NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
+        run: |
+          npm ci --ignore-scripts
+          npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM" --fail
+          if gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase] | index("prompt-injection") != null' | grep -qx true; then
+            echo "::error::The thread was flagged after the gate decided."; exit 1
+          fi
+          cd .. && rm -rf .scanner
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
