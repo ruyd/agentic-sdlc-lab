@@ -14,7 +14,7 @@ interesting part is the process around it. It is money code, so it sits in the *
 | Stage | What happens | Where | Human |
 |---|---|---|---|
 | 1. Intake gate | Input scan of title, body and every comment for prompt injection, hidden text and secrets (findings pause all agents). Bugs need repro steps, expected vs actual, version; features need a user story and acceptance criteria. Missing → the agent asks the reporter, never guesses. Ready → `ready` label | `intake.yml`, `.claude/agents/intake.md` | Answers questions |
-| 2. Plan | Reads `context/` (rules, service map, API spec, lessons, risk tiers), locates the code, writes a plan with a red test | `@claude` on a `ready` issue, `planner` agent | Can stop it |
+| 2. Plan | Reads `context/` (rules, service map, API spec, lessons, risk tiers), locates the code, writes a plan with a red test | A comment starting with `@claude` on an open `ready` issue, `planner` agent | Can stop it |
 | 3. Fix | Failing test first, then the fix; iterates until unit, property and type checks are green on a throwaway runner | `claude.yml`, `implementer` agent | – |
 | 4. Review | Deterministic gates (risk tier, red-green, honest PR body, `npm audit`), reviewer agent (diff vs plan, rules, security), adversarial agent (tries to break it), mutation testing for high risk | `claude-review.yml`, `reviewer` + `adversary` agents, CodeQL | – |
 | 5. PR | Opened with plan, evidence, what was and wasn't tested, assumptions; assigned to a human | `gh pr create --assignee` | Approves, merges |
