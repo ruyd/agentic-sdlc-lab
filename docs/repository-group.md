@@ -52,4 +52,7 @@ a tag, so a change to the base reaches each member only when that member chooses
 ## Upgrade notes
 - v1: initial layout (`context/`, `.claude/agents/`, `scripts/` gates, input scan).
 - v1.x (minor, backwards compatible): Code Group Improvement Layer specialist reviews and `context/review-routing.json`.
-  New label used by the data-loss gate: `data-loss-approved` (create it in the member repo).
+  New labels: `data-loss-approved` (data-loss gate) and `deps-cooldown-waived` (dependency gate); create them in the
+  member repo. Members opt in by adding the gate steps to their workflows; the
+  dependency gate fails on unpinned versions, so first pin with `npm install --save-exact` and add `save-exact=true`
+  to `.npmrc`.
