@@ -83,9 +83,17 @@ jobs:
       - name: Scan title, body and comments
         id: scan
         run: npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM"
-      - name: Edited text invalidates an earlier clearance
+      - name: Scan only the new comment
+        id: comment
+        if: github.event_name == 'issue_comment' && github.event.action == 'created' && steps.scan.outputs.cleared == 'true'
+        run: npx tsx scripts/scan-untrusted.ts comment
+      - name: Edited text, or a new comment with its own findings, invalidates an earlier clearance
+        # `scan-cleared` covers the text a maintainer reviewed, not whatever is posted after it.
         id: invalidate
-        if: github.event.action == 'edited' && steps.scan.outputs.findings != '0' && steps.scan.outputs.cleared == 'true'
+        if: |
+          steps.scan.outputs.cleared == 'true'
+          && ((github.event.action == 'edited' && steps.scan.outputs.findings != '0')
+              || (steps.comment.outputs.comment_findings != '' && steps.comment.outputs.comment_findings != '0'))
         run: |
           gh "$KIND" edit "$NUM" --remove-label scan-cleared
           npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM" > /dev/null
@@ -94,15 +102,12 @@ jobs:
       - name: Pause agents and tell the reporter
         if: steps.scan.outputs.blocked == 'true' || steps.invalidate.outputs.blocked == 'true'
         run: |
-          labels="$(gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name] | join(",")')"
           add="prompt-injection"
           if [ "$SECRET" = "true" ]; then add="$add,security"; fi
           gh "$KIND" edit "$NUM" --add-label "$add" --remove-label ready
-          # Comment once per flagged state, not on every event.
-          case ",$labels," in
-            *",prompt-injection,"*) echo "Already flagged; not commenting again." ;;
-            *) gh "$KIND" comment "$NUM" --body-file runs/scan-report.md ;;
-          esac
+          # One report per thread, edited in place on every later finding (claude.yml shares it), so a re-flag
+          # never posts the report again.
+          npx tsx scripts/sticky-comment.ts "$NUM" input-scan runs/scan-report.md
         env:
           SECRET: ${{ steps.scan.outputs.secret }}
       - name: Say that scan-cleared does not clear the intake agent's flag
@@ -207,13 +212,19 @@ jobs:
               | last | . != null and .event == $e and .actor.type == "User"' <<<"$events" >/dev/null
           }
           has() { jq -e --arg l "$1" 'index($l) != null' <<<"$labels" >/dev/null; }
+          removed_by_other() {  # removed_by_other <label>: something other than a person removed <label> during the run
+            jq -e --arg l "$1" --arg since "$STARTED" '
+              any(.[]; .event == "unlabeled" and (.label.name // "" | ascii_downcase) == $l
+                       and (.created_at // "") >= $since and .actor.type != "User")' <<<"$events" >/dev/null
+          }
           bad=$read_failed
           [ "$read_failed" = 1 ] && echo "::error::could not read the labels after the agent run; restoring from before the run."
           # Every repair is attempted even if another fails, and the restores come first.
           fix() { gh issue edit "$NUM" "$@" || echo "::error::could not run: gh issue edit $*"; }
           for l in prompt-injection security; do
             pre="$PRE_FLAGGED"; [ "$l" = "security" ] && pre="$PRE_SECURITY"
-            if [ "$pre" = "true" ] && ! has "$l" && ! by_person "$l" unlabeled; then
+            # Also a label the agent added and removed again within the run: it was there, and only a person removes it.
+            if { [ "$pre" = "true" ] || removed_by_other "$l"; } && ! has "$l" && ! by_person "$l" unlabeled; then
               # A `ready` that was there before the run was a maintainer's or an earlier intake's decision: keep it.
               if [ "$PRE_READY" = "true" ]; then fix --add-label "$l"; else fix --add-label "$l" --remove-label ready; fi
               labels="$(jq -c --arg l "$l" --arg keep "$PRE_READY" 'if $keep == "true" then . + [$l] else (. - ["ready"]) + [$l] end' <<<"$labels")"

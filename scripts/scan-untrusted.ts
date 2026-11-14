@@ -2,13 +2,25 @@
 // comments, reviews, inline review comments, plus the triggering comment) and scans it.
 //   npx tsx scripts/scan-untrusted.ts issue 12
 //   npx tsx scripts/scan-untrusted.ts pr 5 [--fail]
+//   npx tsx scripts/scan-untrusted.ts comment     # only the comment in $GITHUB_EVENT_PATH: outputs comment_findings
 // Env: EXTRA_TEXT (e.g. the triggering comment body), SCAN_TRUSTED_AUTHORS (comma list; default: this
 // repo's own automation). Writes runs/scan-report.md and, in Actions, blocked/secret/findings outputs.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isBlocked, report, scanAll, type Input } from "./lib/scan.js";
 
 const [kind, num, flag] = process.argv.slice(2);
+const trusted = (process.env.SCAN_TRUSTED_AUTHORS ?? "claude,github-actions,github-actions[bot]").split(",").map((s) => s.trim());
+
+// Scan only the comment that triggered this run. A new comment with its own findings must not ride on a
+// `scan-cleared` given for earlier text (intake.yml removes the clearance when this finds something).
+if (kind === "comment") {
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH ?? "", "utf8")) as { comment?: { body?: string; user?: { login?: string } } };
+  const found = scanAll([{ source: "this comment", author: event.comment?.user?.login, text: event.comment?.body ?? "" }], trusted);
+  console.log(`comment_findings=${found.length}`);
+  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `comment_findings=${found.length}\n`);
+  process.exit(0);
+}
 if ((kind !== "issue" && kind !== "pr") || !num) {
   console.error("usage: scan-untrusted.ts issue|pr <number> [--fail]");
   process.exit(2);
@@ -34,9 +46,9 @@ if (kind === "pr") {
 }
 if (process.env.EXTRA_TEXT) inputs.push({ source: "triggering comment", text: process.env.EXTRA_TEXT });
 
-const trusted = (process.env.SCAN_TRUSTED_AUTHORS ?? "claude,github-actions,github-actions[bot]").split(",").map((s) => s.trim());
 const findings = scanAll(inputs, trusted);
-const cleared = item.labels.some((l) => l.name === "scan-cleared");
+// GitHub label names are case-insensitive, and so is every workflow check of this label.
+const cleared = item.labels.some((l) => l.name.toLowerCase() === "scan-cleared");
 const blocked = isBlocked(findings, cleared);
 const md = report(findings, cleared);
 

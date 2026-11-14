@@ -89,10 +89,11 @@ jobs:
           add="prompt-injection"
           if [ "$SECRET" = "true" ]; then add="$add,security"; fi
           if [ "$KIND" = "issue" ]; then gh issue edit "$NUM" --add-label "$add" --remove-label ready; else gh pr edit "$NUM" --add-label "$add"; fi
+          # The report itself is the thread's one input-scan comment (intake.yml edits the same one), so it is
+          # never posted twice. The person who called @claude gets a short reply pointing to it.
+          npx tsx scripts/sticky-comment.ts "$NUM" input-scan runs/scan-report.md
           {
-            echo "@claude did not run."
-            echo
-            cat runs/scan-report.md
+            echo "@claude did not run: the input scan flagged text in this thread (see the input scan report)."
             if [ "$SECRET" = "true" ]; then
               echo
               echo "Rotate the leaked secret now and delete the text. A maintainer decides when work can resume (intake will not add \`ready\` to a \`security\` issue), then mentions @claude again."
@@ -178,7 +179,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
-      - run: npm ci
+      - run: npm ci --ignore-scripts   # may be PR code (review comments): never run its install scripts
       # Scan again right before Claude reads the thread, so a comment posted after the gate decided is not read
       # unscanned. The scanner comes from the default branch, in its own folder.
       - uses: actions/checkout@v7
@@ -192,9 +193,11 @@ jobs:
           KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
           NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
         run: |
+          # Remove the scanner folder however this step ends, so it can never be read or committed by Claude.
+          trap 'cd "$GITHUB_WORKSPACE" && rm -rf .scanner' EXIT
           npm ci --ignore-scripts
           npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM" --fail
-          cd .. && rm -rf .scanner
+          cd ..
           # recheck: fail closed. A failed read stops the job; only an explicit "go" lets Claude run.
           labels="$(gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
           verdict="$(jq -r --arg kind "$KIND" '

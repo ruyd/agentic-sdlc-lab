@@ -280,6 +280,19 @@ describe("intake: the agent cannot clear a flag", () => {
     expect(r.edits).toContain("--add-label prompt-injection");
   });
 
+  it("restores security the agent added and removed again within the run, and removes its ready", () => {
+    const r = guard(["bug", "ready"], { PRE_SECURITY: "false", PRE_READY: "false", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("security", AGENT), unlabeled("security", AGENT), labeled("ready", AGENT)]) });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--add-label security");
+    expect(r.edits).toContain("--remove-label ready");
+  });
+
+  it("does not restore a label the agent removed before the run started", () => {
+    expect(guard(["bug"], { PRE_SECURITY: "false", CLEARED: "false",
+      EVENTS_JSON: JSON.stringify([labeled("security", AGENT, BEFORE), unlabeled("security", AGENT, BEFORE)]) })).toMatchObject({ status: 0, edits: "" });
+  });
+
   it("is case-insensitive, like GitHub labels", () => {
     expect(guard(["Prompt-Injection"], { PRE_FLAGGED: "true", CLEARED: "false" }).status).toBe(0);
     expect(guard(["Scan-Cleared"], { PRE_FLAGGED: "false", CLEARED: "false" }).status).toBe(1);
