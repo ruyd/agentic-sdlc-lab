@@ -4,7 +4,7 @@
     {
       "name": "high",
       "reason": "money calculations, guardrails, auth or data deletion",
-      "paths": ["src/invoice.ts", "src/**/payment*", "src/**/auth*", "src/**/delete*", ".github/**", ".claude/**", "context/risk-tiers.json", "scripts/lib/scan.ts", "scripts/scan-untrusted.ts", "scripts/lib/review-loop.ts", "scripts/review-loop.ts"],
+      "paths": ["src/invoice.ts", "src/**/payment*", "src/**/auth*", "src/**/delete*", ".github/**", ".claude/**", "context/risk-tiers.json", "scripts/lib/scan.ts", "scripts/scan-untrusted.ts", "scripts/lib/review-loop.ts", "scripts/review-loop.ts", "scripts/lib/data-loss.ts", "scripts/data-loss-gate.ts", "scripts/lib/review-routing.ts", "scripts/review-routing.ts", "context/review-routing.json"],
       "requires": ["senior review (CODEOWNERS)", "adversarial review", "mutation score >= 80%", "property tests pass"]
     },
     {

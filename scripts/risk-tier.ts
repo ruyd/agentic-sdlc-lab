@@ -2,17 +2,11 @@
 //   npx tsx scripts/risk-tier.ts [base-ref]     # default base: origin/main
 import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
+import { globToRegExp } from "./lib/glob.js";
 
 interface Tier { name: string; reason: string; paths: string[]; requires: string[] }
 const { tiers }: { tiers: Tier[] } = JSON.parse(readFileSync("context/risk-tiers.json", "utf8"));
 
-export function globToRegExp(glob: string): RegExp {
-  const re = glob
-    .split("**")
-    .map((part) => part.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"))
-    .join(".*");
-  return new RegExp(`^${re}$`);
-}
 
 export function tierFor(file: string): Tier {
   return tiers.find((t) => t.paths.some((p) => globToRegExp(p).test(file))) ?? tiers[tiers.length - 1]!;

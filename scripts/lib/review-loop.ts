@@ -7,7 +7,19 @@
 
 export const MAX_ROUNDS = 2;
 export const MAX_CHANGED_LINES = 300;
-export type Agent = "review" | "adversary" | "budget";
+import { BACKEND_REVIEWS, FRONTEND_REVIEWS } from "./review-routing.js";
+
+/** Every agent that reviews a PR, including the specialists of the Code Group Improvement Layer. They share one budget. */
+export const REVIEWERS = ["review", "adversary", ...BACKEND_REVIEWS, ...FRONTEND_REVIEWS] as const;
+export type Reviewer = (typeof REVIEWERS)[number];
+export type Agent = Reviewer | "budget";
+export const isReviewer = (name: string): name is Reviewer => (REVIEWERS as readonly string[]).includes(name);
+
+const TITLES: Record<Agent, string> = {
+  review: "Review", adversary: "Adversarial review", budget: "Agent review budget",
+  dba: "DBA review", performance: "Performance review", security: "Security review",
+  ux: "UX review", motion: "Motion review", usertest: "Synthetic user test",
+};
 
 const MARKER = /<!--\s*agent-review:([a-z]+)\s+round:(\d+)\s*-->/;
 
@@ -31,9 +43,9 @@ export function findSticky(comments: Comment[], agent: Agent): Comment | undefin
   return comments.filter((c) => c.author === TRUSTED_POSTER && parseMarker(c.body)?.agent === agent).at(-1);
 }
 
-/** Rounds of agent review already run on the PR: the highest round in a trusted review or adversary comment. */
+/** Rounds of agent review already run on the PR: the highest round in any trusted reviewer comment. */
 export function roundsDone(comments: Comment[]): number {
-  return Math.max(0, ...(["review", "adversary"] as const).map((a) => {
+  return Math.max(0, ...REVIEWERS.map((a) => {
     const c = findSticky(comments, a);
     return c ? parseMarker(c.body)!.round : 0;
   }));
@@ -47,7 +59,7 @@ export function budget(comments: Comment[], reviewAgain: boolean): { done: numbe
 
 /** The comment body the workflow posts for an agent's round. */
 export function stickyBody(agent: Agent, round: number, report: string): string {
-  const title = agent === "review" ? "Review" : agent === "adversary" ? "Adversarial review" : "Agent review budget";
+  const title = TITLES[agent];
   const extra = round > MAX_ROUNDS ? ` (extra round, \`review-again\`)` : "";
   return `${marker(agent, round)}\n**${title}: round ${round} of ${MAX_ROUNDS}${extra}.** This comment is updated in place each round; its edit history keeps earlier rounds.\n\n${report.trim()}\n`;
 }

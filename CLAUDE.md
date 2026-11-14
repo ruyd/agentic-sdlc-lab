@@ -59,6 +59,28 @@ Reviews find something every time; without a stop rule a review-fix-review cycle
 - **Prefer a live test over another round** for logic that only runs in GitHub Actions (comments, labels, events).
 - **Check in before pushing again** when a round turned up only follow-ups: report what is left and let the human decide.
 
+## Specialist reviews (Code Group Improvement Layer)
+On top of the reviewer and adversary, CI runs specialist reviews routed by what the diff touches
+(`context/review-routing.json`; a member repo keeps its own copy). Each writes one report ending `Blockers: N`,
+keeps one PR comment, shares the 2-round budget, and fails its check only on blockers. A specialist never edits code.
+When you work on a change locally, apply the same checks before opening the PR.
+
+**Backend changes** (backend or database paths) get three reviews:
+- **DBA** (`.claude/agents/dba.md`; only when database files change):
+  - *Migration / change data-loss gate:* `scripts/data-loss-gate.ts` fails `gates` on added lines that drop, truncate,
+    rename or narrow data, or delete/update without WHERE, unless a maintainer adds `data-loss-approved`. The DBA then
+    judges every flagged line: expand/contract, backfill, reversible down-migration, safe while old code runs.
+    Data loss without a stated plan is a blocker even with the label.
+  - *Locking and rollout:* long locks on large tables, migrations that cannot run alongside the old code.
+  - *Query plans:* new or changed queries, from `runs/query-plans.txt` when the repo sets `db.explainCommand`,
+    otherwise from the schema: sequential scans on large tables, N+1, unbounded result sets.
+  - *Indexing:* every new filter/join/sort column on a large table is indexed; no duplicate indexes; column order fits.
+  - *Integrity:* keys, uniqueness, NOT NULL; money in integer minor units.
+- **Performance** (`.claude/agents/performance.md`): algorithmic cost, data structures for the access pattern, logic
+  flow (early returns, repeated work, independent awaits run in sequence), I/O batching and caching (a cache needs a
+  key, a bound and an expiry; one that can serve stale or another user's data is a blocker), unbounded memory.
+  Findings say what input size makes them real; no micro-optimisations without evidence.
+
 ## Working agreement
 - Keep PRs small: one issue, one PR, under ~300 changed lines.
 - Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`).

@@ -1,0 +1,11 @@
+{
+  "$comment": "Which specialist reviews a diff gets (scripts/review-routing.ts). Globs: * within a path segment, ** across. A member repo keeps its own copy at context/review-routing.json; without one, the base's applies. A review runs only if its agent file exists (.claude/agents/<name>.md, or the base's).",
+  "backend": ["src/**", "server/**", "api/**", "lib/**", "agents/**", "scripts/**", "services/**"],
+  "frontend": ["web/**", "frontend/**", "ui/**", "public/**", "**/*.tsx", "**/*.jsx", "**/*.vue", "**/*.svelte", "**/*.css", "**/*.scss"],
+  "db": {
+    "paths": ["migrations/**", "db/**", "**/*.sql", "prisma/**", "**/schema.prisma", "**/migrations/**"],
+    "explainCommand": ""
+  },
+  "dependencies": ["package.json", "package-lock.json", "**/package.json", "**/package-lock.json", ".npmrc"],
+  "ignore": ["test/**", "tests/**", "**/*.test.*", "**/*.spec.*", "docs/**", "**/*.md"]
+}
