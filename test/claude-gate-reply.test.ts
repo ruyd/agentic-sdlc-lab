@@ -34,8 +34,8 @@ function invoked(body: string, state = "open"): boolean {
 }
 
 describe("@claude invocation", () => {
-  it("counts a line that starts with @claude", () => {
-    for (const body of ["@claude fix this", "  @claude please", "   @claude max indent", "Thanks!\n@claude go ahead", "Thanks!\r\n@claude go", "@claude", "@claude, plan it", "@claude: plan it", "@Claude fix this", "@CLAUDE go", "```\ncode\n```\n@claude after the block", "<!-- note -->\n@claude after a comment"]) {
+  it("counts a comment whose first non-blank line starts with @claude", () => {
+    for (const body of ["@claude fix this", "  @claude please", "   @claude max indent", "\n\n@claude after blank lines", "\r\n@claude go", "@claude", "@claude\r\nand more", "@claude, plan it", "@claude: plan it", "@claude\tfix", "@Claude fix this", "@CLAUDE go"]) {
       expect(invoked(body), body).toBe(true);
     }
   });
@@ -43,6 +43,13 @@ describe("@claude invocation", () => {
   it("ignores passing mentions, quotes, code and look-alike handles", () => {
     for (const body of [
       "Test done on an @claude comment. Closing.",
+      "Thanks!\n@claude go ahead",
+      "```\ncode\n```\n@claude after the block",
+      "<!-- note -->\n@claude after a comment",
+      "Example:\n```\n```js\n@claude fix this\n```",
+      "Type `\n@claude fix this\n` to trigger it",
+      "<pre>\n@claude fix this\n</pre>",
+      "> quoted\n@claude go",
       "> @claude fix this",
       "`@claude` is the trigger",
       "@claudebot hi",
@@ -63,9 +70,10 @@ describe("@claude invocation", () => {
     }
   });
 
-  it("ignores comments on closed issues and PRs", () => {
-    expect(invoked("@claude fix this", "closed")).toBe(false);
-    expect(invoked("@claude fix this", "")).toBe(true);
+  it("runs only on open issues and PRs, and treats a missing state as closed", () => {
+    expect(invoked("@claude fix this", "open")).toBe(true);
+    expect(invoked("@claude fix this", "OPEN")).toBe(true);
+    for (const state of ["closed", "CLOSED", "", "merged"]) expect(invoked("@claude fix this", state), state).toBe(false);
   });
 
   it("does not run shell in the comment body", () => {
@@ -155,11 +163,12 @@ describe("@claude gate reply", () => {
     }
   });
 
-  it("does not ask for scan-cleared again once it is there", () => {
+  it("does not ask for scan-cleared again once it is there, or claim the flag is gone", () => {
     const r = reply(["prompt-injection", "scan-cleared"]);
-    expect(r).toContain("was cleared");
+    expect(r).toContain("still labeled `prompt-injection`");
+    expect(r).toContain("removing `prompt-injection`");
+    expect(r).not.toContain("was cleared");
     expect(r).not.toMatch(/maintainer adds `scan-cleared`/);
-    expect(r).toContain("intake is checking the issue again");
   });
 
   it("does not split a label whose name contains a comma", () => {
@@ -208,11 +217,16 @@ describe("@claude live labels", () => {
     expect(o.ready).toBe("false");
   });
 
-  it("treats a live prompt-injection label as flagged unless scan-cleared is there", () => {
+  it("treats any live prompt-injection label as flagged, even with scan-cleared", () => {
     expect(labels(["ready", "prompt-injection"]).flagged).toBe("true");
     expect(labels(["ready", "Prompt-Injection"]).flagged).toBe("true");
-    expect(labels(["ready", "prompt-injection", "scan-cleared"]).flagged).toBe("false");
+    expect(labels(["ready", "prompt-injection", "scan-cleared"]).flagged).toBe("true");
+    expect(labels(["ready", "scan-cleared"]).flagged).toBe("false");
     expect(labels(["Ready"]).ready).toBe("true");
+  });
+
+  it("agrees with the scan: a blocked scan is flagged even with scan-cleared (a secret)", () => {
+    expect(labels(["ready", "scan-cleared"], "true", "true").flagged).toBe("true");
   });
 });
 

@@ -1,4 +1,4 @@
-# Stages 2-3-5: a line starting with "@claude" on an open READY issue → plan (from context/), fix test-first, open an honest PR
+# Stages 2-3-5: a comment starting with "@claude" on an open READY issue → plan (from context/), fix test-first, open an honest PR
 # assigned to a human. On a PR, "@claude" addresses review feedback. Agents never merge or release.
 name: "2-3 · Plan and fix (@claude)"
 on:
@@ -14,6 +14,7 @@ jobs:
     #      triggering comment itself counts. The labels are read live, not from the event payload.
     #   3. Flagged by the scan: label the thread and post the report. Flagged live (by the intake agent) or issue
     #      not `ready`: explain the real reason. Claude runs only when nothing is flagged and the issue is `ready`.
+    #   The scanner is checked out from the default branch, never from a PR.
     if: |
       contains(github.event.comment.body, '@claude')
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
@@ -30,15 +31,16 @@ jobs:
       KIND: ${{ (github.event_name == 'pull_request_review_comment' || github.event.issue.pull_request) && 'pr' || 'issue' }}
       NUM: ${{ github.event.pull_request.number || github.event.issue.number }}
     steps:
-      # invocation: a call is a line that starts with @claude (any case, up to 3 spaces of indent) followed by a
-      # space, comma, colon or the end of the line. Code blocks (fenced or indented 4+ spaces), HTML comments,
-      # quoted replies ("> @claude"), possessives ("@claude's") and comments on closed issues or PRs do not count.
+      # invocation: a comment calls @claude only when its first non-blank line starts with @claude (any case, up to
+      # 3 spaces of indent) followed by a space, comma, colon or the end of the line, and only on an issue or PR whose
+      # state is "open" (anything else, including a missing state, counts as closed). Because only the first line
+      # counts, code blocks, HTML comments, <pre>, quotes and passing mentions never do, with no markdown parsing.
       # Tested by test/claude-gate-reply.test.ts.
       - id: invoke
         run: |
-          if [ "${STATE:-}" = "closed" ]; then echo "invoked=false" >> "$GITHUB_OUTPUT"; exit 0; fi
-          visible="$(printf '%s' "${BODY:-}" | perl -0777 -pe 's/\r//g; s/<!--.*?(?:-->|\z)//gs; s/^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}\1[^\n]*$|\z)//gms')"
-          if grep -qiE '^ {0,3}@claude([[:space:],:]|$)' <<<"$visible"; then
+          state="$(printf '%s' "${STATE:-}" | tr '[:upper:]' '[:lower:]')"
+          first="$(printf '%s\n' "${BODY:-}" | tr -d '\r' | grep -m1 -v '^[[:space:]]*$' || true)"
+          if [ "$state" = "open" ] && grep -qiE '^ {0,3}@claude([[:space:],:]|$)' <<<"$first"; then
             echo "invoked=true" >> "$GITHUB_OUTPUT"
           else
             echo "invoked=false" >> "$GITHUB_OUTPUT"
@@ -46,8 +48,10 @@ jobs:
         env:
           BODY: ${{ github.event.comment.body }}
           STATE: ${{ github.event.issue.state || github.event.pull_request.state }}
+      # The scanner always comes from the default branch, so a PR cannot change the scan that gates its own thread.
       - if: steps.invoke.outputs.invoked == 'true'
         uses: actions/checkout@v7
+        with: { ref: "${{ github.event.repository.default_branch }}" }
       - if: steps.invoke.outputs.invoked == 'true'
         uses: actions/setup-node@v5
         with: { node-version: 22, cache: npm }
@@ -69,8 +73,11 @@ jobs:
           if [ "$SECRET" = "true" ]; then json="$(jq -c '. + ["security"] | unique' <<<"$json")"; fi
           echo "json=$(jq -c . <<<"$json")" >> "$GITHUB_OUTPUT"
           echo "ready=$(jq -r 'map(ascii_downcase) | index("ready") != null' <<<"$json")" >> "$GITHUB_OUTPUT"
-          # A live flag blocks too (the intake agent can flag what the patterns miss), unless a maintainer cleared it.
-          echo "flagged=$(jq -r 'map(ascii_downcase) | index("prompt-injection") != null and index("scan-cleared") == null' <<<"$json")" >> "$GITHUB_OUTPUT"
+          # Any live flag blocks: intake.yml removes a scan flag once it is cleared, and a flag set by the intake agent
+          # (which catches what the patterns miss) stays until a maintainer removes it. `scan-cleared` alone is not enough.
+          flagged="$(jq -r 'map(ascii_downcase) | index("prompt-injection") != null' <<<"$json")"
+          if [ "$BLOCKED" = "true" ]; then flagged=true; fi
+          echo "flagged=$flagged" >> "$GITHUB_OUTPUT"
         env:
           BLOCKED: ${{ steps.scan.outputs.blocked }}
           SECRET: ${{ steps.scan.outputs.secret }}
@@ -115,9 +122,9 @@ jobs:
             if has scan-cleared; then msg="$msg."; else msg="$msg, or a maintainer adds \`scan-cleared\` if it is a false positive."; fi
             msg="$msg $resume"
           elif has prompt-injection && has scan-cleared; then
-            msg="@claude did not run: the flag on this thread was cleared, and intake is checking the issue again. Once it adds \`ready\`, mention @claude again. If intake asks for details, add them first."
+            msg="@claude did not run: this thread is still labeled \`prompt-injection\` although \`scan-cleared\` is set. Either intake is still clearing the scan flag (mention @claude again in a minute), or the intake agent flagged other text, which only a maintainer can clear by removing \`prompt-injection\` after reviewing it."
           elif has prompt-injection; then
-            msg="@claude did not run: text in this thread was flagged as possible prompt injection. Edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. $resume"
+            msg="@claude did not run: text in this thread was flagged as possible prompt injection. If the input scan flagged it, edit the flagged text, or a maintainer adds \`scan-cleared\` if it is a false positive. If the intake agent flagged it, a maintainer reviews the text and removes \`prompt-injection\`. $resume"
           elif has security; then
             msg="@claude did not run: this issue is marked \`security\`. If a secret was posted here, rotate it even if the text was deleted. Vulnerabilities belong in a private report (Security, then Report a vulnerability), not a public issue. If it is safe to work on in public, a maintainer adds \`ready\` and mentions @claude again."
           else
