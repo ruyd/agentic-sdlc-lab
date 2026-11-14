@@ -257,3 +257,43 @@ describe("@claude decide", () => {
     expect(decide({ FLAGGED: "true" }, "pr")).toBe("false");
   });
 });
+
+describe("claude job: scan again just before Claude reads the thread", () => {
+  // Runs the step from a scratch workspace with stub npm/npx/gh. `scan` is the scanner's exit code.
+  function rescan(kind: "issue" | "pr", labels: string[] | "fail", scan = 0): { status: number; scannerGone: boolean } {
+    const ws = mkdtempSync(join(tmpdir(), "rescan-"));
+    const bin = mkdtempSync(join(tmpdir(), "rescan-bin-"));
+    const scanner = join(ws, ".scanner");
+    execFileSync("mkdir", [scanner]);
+    writeFileSync(join(bin, "npm"), "#!/usr/bin/env bash\nexit 0\n");
+    writeFileSync(join(bin, "npx"), `#!/usr/bin/env bash\nexit ${scan}\n`);
+    const view = labels === "fail" ? "exit 1" : `jq -r '[.labels[].name | ascii_downcase]' <<<'${JSON.stringify({ labels: labels.map((name) => ({ name })) })}'`;
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\n${view}\n`);
+    for (const f of ["npm", "npx", "gh"]) chmodSync(join(bin, f), 0o755);
+    let status = 0;
+    try {
+      execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("rescan", "recheck")], {
+        cwd: scanner, env: { PATH: `${bin}:${process.env.PATH}`, KIND: kind, NUM: "1" }, stdio: "pipe",
+      });
+    } catch (e) {
+      status = (e as { status: number }).status;
+    }
+    return { status, scannerGone: !existsSync(scanner) };
+  }
+
+  it("lets Claude run only on an explicit go", () => {
+    expect(rescan("issue", ["ready", "bug"])).toEqual({ status: 0, scannerGone: true });
+    expect(rescan("pr", [])).toEqual({ status: 0, scannerGone: true });
+  });
+
+  it("stops when the thread was flagged or lost ready after the gate decided", () => {
+    expect(rescan("issue", ["ready", "prompt-injection"]).status).not.toBe(0);
+    expect(rescan("pr", ["Prompt-Injection"]).status).not.toBe(0);
+    expect(rescan("issue", ["needs-info"]).status).not.toBe(0);
+  });
+
+  it("fails closed when the labels cannot be read or the scan blocks", () => {
+    expect(rescan("issue", "fail").status).not.toBe(0);
+    expect(rescan("issue", ["ready"], 1).status).not.toBe(0);
+  });
+});

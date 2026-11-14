@@ -6,6 +6,11 @@ on:
     types: [created]
   pull_request_review_comment:
     types: [created]
+# `shell: bash` runs every step with -eo pipefail (the default for steps without it has no pipefail), so a failed
+# command inside a pipe fails the step instead of passing on partial output. The tests use the same flags.
+defaults:
+  run:
+    shell: bash
 jobs:
   gate:
     # Decides whether @claude runs, in this order:
@@ -98,7 +103,7 @@ jobs:
       - name: Flagged PR - explain
         if: env.KIND == 'pr' && steps.scan.outputs.blocked == 'false' && steps.labels.outputs.flagged == 'true'
         run: |
-          gh pr comment "$NUM" --body "@claude did not run: this PR is labeled \`prompt-injection\`. A maintainer reviews the text and adds \`scan-cleared\` if it is safe, then mentions @claude again."
+          gh pr comment "$NUM" --body "@claude did not run: this PR is labeled \`prompt-injection\`. A maintainer reviews the text and adds \`scan-cleared\` if it is safe (or removes \`prompt-injection\` if the intake agent set it), then mentions @claude again. If \`scan-cleared\` was just added, the flag clears with the next comment."
       # gate-reply: tell the reporter the real reason @claude did not run and how to resume.
       # Clearing a flag makes intake check readiness again (intake.yml), so nobody adds `ready` by hand.
       # Tested by test/claude-gate-reply.test.ts, which runs this script against a stub `gh`.
@@ -172,6 +177,7 @@ jobs:
       # unscanned. The scanner comes from the default branch, in its own folder.
       - uses: actions/checkout@v7
         with: { ref: "${{ github.event.repository.default_branch }}", path: .scanner }
+      # rescan: tested by test/claude-gate-reply.test.ts.
       - name: Scan again just before Claude reads the thread
         working-directory: .scanner
         env:
@@ -181,10 +187,14 @@ jobs:
         run: |
           npm ci --ignore-scripts
           npx tsx scripts/scan-untrusted.ts "$KIND" "$NUM" --fail
-          if gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase] | index("prompt-injection") != null' | grep -qx true; then
-            echo "::error::The thread was flagged after the gate decided."; exit 1
-          fi
           cd .. && rm -rf .scanner
+          # recheck: fail closed. A failed read stops the job; only an explicit "go" lets Claude run.
+          labels="$(gh "$KIND" view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
+          verdict="$(jq -r --arg kind "$KIND" '
+            if index("prompt-injection") != null then "flagged"
+            elif $kind == "issue" and index("ready") == null then "not-ready"
+            else "go" end' <<<"$labels")"
+          if [ "$verdict" != "go" ]; then echo "::error::The thread changed after the gate decided: $verdict."; exit 1; fi
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

@@ -16,15 +16,22 @@ on:
     types: [opened, edited, reopened, labeled, unlabeled]
   issue_comment:
     types: [created, edited]
-# One queue per issue for the events that matter. Other label changes (the agent's own `bug`, `ready`, ...) get a
-# group of their own, so they never replace a real pending run.
+# One queue per issue for the events that matter. Every other label change (the agent's own `bug`, `ready`, ...,
+# or any label event not made by a person) gets a group of its own, so it never replaces a real pending run.
 concurrency:
   group: >-
     intake-${{ github.event.issue.number }}-${{
-      ((github.event.action == 'labeled' && github.event.label.name != 'scan-cleared')
-        || (github.event.action == 'unlabeled' && github.event.label.name != 'prompt-injection'))
+      ((github.event.action == 'labeled' || github.event.action == 'unlabeled')
+        && (github.event.sender.type != 'User'
+            || (github.event.action == 'labeled' && github.event.label.name != 'scan-cleared')
+            || (github.event.action == 'unlabeled' && github.event.label.name != 'prompt-injection')))
       && github.run_id || 'main' }}
   cancel-in-progress: false
+# `shell: bash` runs every step with -eo pipefail (the default for steps without it has no pipefail), so a failed
+# page of `gh api --paginate` fails the step instead of deciding from partial history. The tests use the same flags.
+defaults:
+  run:
+    shell: bash
 jobs:
   scan:
     # Skip comments posted by this repo's own automation (they would re-trigger the scan on its own report).
@@ -140,6 +147,7 @@ jobs:
           labels="$(gh issue view "$NUM" --json labels --jq '[.labels[].name | ascii_downcase]')"
           echo "flagged=$(jq 'index("prompt-injection") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
           echo "ready=$(jq 'index("ready") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
+          echo "security=$(jq 'index("security") != null' <<<"$labels")" >> "$GITHUB_OUTPUT"
       - uses: anthropics/claude-code-action@v1
         id: claude
         with:
@@ -159,16 +167,16 @@ jobs:
               money calculations, auth or data deletion. Do not comment.
             - If NOT READY: add `needs-info`, remove `ready` if present, and post ONE comment to the reporter listing
               exactly what to add. Never fill in the gaps yourself.
-            - If the issue has `security`, never add `ready`: a maintainer decides when it is safe to work on in public.
+            - If the issue has `security` or `prompt-injection`, never add `ready`: a maintainer decides.
             - Never close, assign, or edit the issue body. Never add or remove `scan-cleared`, and never remove
-              `prompt-injection`.
+              `prompt-injection` or `security`.
           claude_args: >-
             --max-turns 8
             --model haiku
             --allowedTools "Read,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*)"
-      # agent-guard: `scan-cleared`, removing `prompt-injection`, and `ready` on a `security` issue are maintainer
-      # decisions. Undo any of them and fail.
-      # Tested by test/claude-gate-reply.test.ts.
+      # agent-guard: the agent may add `prompt-injection` and `security`, never remove them; may never add
+      # `scan-cleared`; and may not leave `ready` it added on an issue that has `security` or `prompt-injection`.
+      # Undo any of these and fail. Tested by test/intake-flags.test.ts.
       - name: Agent cannot clear a flag
         if: always()
         run: |
@@ -181,12 +189,19 @@ jobs:
           fi
           if [ "$PRE_FLAGGED" = "true" ] && ! jq -e 'index("prompt-injection") != null' <<<"$labels" >/dev/null; then
             gh issue edit "$NUM" --add-label prompt-injection --remove-label ready
+            labels="$(jq -c '(. - ["ready"]) + ["prompt-injection"]' <<<"$labels")"
             echo "::error::prompt-injection was removed during the agent run; restored it."
             bad=1
           fi
-          if [ "$PRE_READY" != "true" ] && jq -e 'index("security") != null and index("ready") != null' <<<"$labels" >/dev/null; then
+          if [ "$PRE_SECURITY" = "true" ] && ! jq -e 'index("security") != null' <<<"$labels" >/dev/null; then
+            gh issue edit "$NUM" --add-label security --remove-label ready
+            labels="$(jq -c '(. - ["ready"]) + ["security"]' <<<"$labels")"
+            echo "::error::security was removed during the agent run; restored it."
+            bad=1
+          fi
+          if [ "$PRE_READY" != "true" ] && jq -e 'index("ready") != null and (index("security") != null or index("prompt-injection") != null)' <<<"$labels" >/dev/null; then
             gh issue edit "$NUM" --remove-label ready
-            echo "::error::ready was added to a security issue during the agent run; removed it."
+            echo "::error::ready was added to a flagged or security issue during the agent run; removed it."
             bad=1
           fi
           exit "$bad"
@@ -194,6 +209,7 @@ jobs:
           CLEARED: ${{ needs.scan.outputs.cleared }}
           PRE_FLAGGED: ${{ steps.pre.outputs.flagged }}
           PRE_READY: ${{ steps.pre.outputs.ready }}
+          PRE_SECURITY: ${{ steps.pre.outputs.security }}
       - uses: actions/upload-artifact@v7
         if: always() && steps.claude.outputs.execution_file
         with: { name: intake-execution, path: "${{ steps.claude.outputs.execution_file }}" }

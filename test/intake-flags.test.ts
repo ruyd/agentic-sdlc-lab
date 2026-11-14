@@ -25,7 +25,7 @@ for ((i=0; i<\${#args[@]}; i++)); do [ "\${args[$i]}" = "--jq" ] && jqexpr="\${a
 case "$1 $2" in
   "issue view"|"pr view") data="$VIEW_JSON" ;;
   "issue edit"|"pr edit") echo "$*" >> "$EDIT_LOG"; exit 0 ;;
-  api*) data="$EVENTS_JSON" ;;
+  api*) printf '%s\n' "$EVENTS_JSON"; [ -n "$EVENTS_FAIL" ] && exit 1; exit 0 ;;
   *) echo "unexpected gh call: $*" >&2; exit 3 ;;
 esac
 if [ -n "$jqexpr" ]; then jq -r "$jqexpr" <<<"$data"; else echo "$data"; fi
@@ -61,6 +61,14 @@ const labeled = (name: string, login: string) => ({ event: "labeled", label: { n
 const unlabeled = (name: string, login: string) => ({ event: "unlabeled", label: { name }, actor: actor(login) });
 const SCAN = "github-actions[bot]";
 const AGENT = "claude[bot]";
+
+describe("workflow shell", () => {
+  it("runs every step with -eo pipefail, like these tests", () => {
+    for (const wf of ["intake", "claude"]) {
+      expect(readFileSync(resolve(`.github/workflows/${wf}.yml`), "utf8"), wf).toMatch(/^defaults:\n {2}run:\n {4}shell: bash$/m);
+    }
+  });
+});
 
 describe("intake: who set the flag", () => {
   // `pages` splits the events the way `gh api --paginate` prints them: one JSON array per page.
@@ -110,6 +118,12 @@ describe("intake: who set the flag", () => {
     expect(source(["bug"], [labeled("prompt-injection", SCAN)])).toEqual({ was_flagged: "false", scan_flag: "false" });
   });
 
+  it("fails the step when a page of events cannot be read, instead of deciding from part of the history", () => {
+    const r = run("flag-source", ["prompt-injection"], { EVENTS_JSON: JSON.stringify([labeled("prompt-injection", SCAN)]), EVENTS_FAIL: "1" });
+    expect(r.status).not.toBe(0);
+    expect(r.out.scan_flag).toBeUndefined();
+  });
+
   it("a flag with no labeling event on record is not treated as a scan flag", () => {
     expect(source(["prompt-injection"], []).scan_flag).toBe("false");
   });
@@ -145,6 +159,19 @@ describe("intake: the agent cannot clear a flag", () => {
 
   it("leaves ready on a security issue that a maintainer had already marked ready", () => {
     expect(guard(["security", "ready"], { PRE_FLAGGED: "false", PRE_READY: "true", CLEARED: "false" })).toMatchObject({ status: 0, edits: "" });
+  });
+
+  it("restores security if the agent removed it, and removes ready", () => {
+    const r = guard(["bug", "ready"], { PRE_FLAGGED: "false", PRE_READY: "false", PRE_SECURITY: "true", CLEARED: "false" });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--add-label security");
+    expect(r.edits).toContain("--remove-label ready");
+  });
+
+  it("removes ready the agent added while the issue is flagged", () => {
+    const r = guard(["prompt-injection", "ready", "bug"], { PRE_FLAGGED: "true", PRE_READY: "false", CLEARED: "false" });
+    expect(r.status).toBe(1);
+    expect(r.edits).toContain("--remove-label ready");
   });
 
   it("is case-insensitive, like GitHub labels", () => {
