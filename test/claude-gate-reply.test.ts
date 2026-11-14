@@ -1,4 +1,5 @@
-// Runs the `gate` reply script from .github/workflows/claude.yml against a stub `gh` for each label state.
+// Runs scripts from the `gate` job in .github/workflows/claude.yml: the invocation check, and the reply
+// for an issue that is not ready (against a stub `gh`, for each label state).
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,16 +8,96 @@ import { describe, expect, it } from "vitest";
 
 const WORKFLOW = resolve(".github/workflows/claude.yml");
 
-function gateScript(): string {
+// The step after `# <marker>:`: its `run: |` block, up to the step's `env:`.
+function stepScript(marker: string, mustContain: string): string {
   const lines = readFileSync(WORKFLOW, "utf8").split("\n");
-  const marker = lines.findIndex((l) => l.includes("# gate-reply:"));
-  const run = lines.findIndex((l, i) => i > marker && l.trim() === "- run: |");
-  const end = lines.findIndex((l, i) => i > run && l.trim() === "env:");
-  if (marker < 0 || run < 0 || end < 0) throw new Error("gate reply step not found");
+  const at = lines.findIndex((l) => l.includes(`# ${marker}:`));
+  const run = lines.findIndex((l, i) => i > at && /^-?\s*run: \|$/.test(l.trim()));
+  // The block ends at the first non-blank line indented less than its content (the next key or step).
+  const end = lines.findIndex((l, i) => i > run && l.trim() !== "" && !l.startsWith(" ".repeat(10)));
+  if (at < 0 || run < 0 || end < 0) throw new Error(`${marker} step not found`);
   const script = lines.slice(run + 1, end).map((l) => l.replace(/^ {10}/, "")).join("\n");
-  if (!script.includes("gh issue comment")) throw new Error("gate reply step extracted without its gh call");
+  if (!script.includes(mustContain)) throw new Error(`${marker} step extracted without ${mustContain}`);
   return script;
 }
+const gateScript = () => stepScript("gate-reply", "gh issue comment");
+
+function invoked(body: string, state = "open", where: "issue" | "pull_request" = "issue"): boolean {
+  const dir = mkdtempSync(join(tmpdir(), "invoke-"));
+  const out = join(dir, "out");
+  const event = join(dir, "event.json");
+  writeFileSync(out, "");
+  writeFileSync(event, JSON.stringify({ comment: { body }, [where]: state === "" ? {} : { state } }));
+  execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("invocation", "invoked=")], {
+    env: { PATH: process.env.PATH, GITHUB_OUTPUT: out, GITHUB_EVENT_PATH: event },
+  });
+  const value = readFileSync(out, "utf8").trim();
+  if (value !== "invoked=true" && value !== "invoked=false") throw new Error(`unexpected output: ${value}`);
+  return value === "invoked=true";
+}
+
+describe("@claude invocation", () => {
+  it("counts a comment whose first non-blank line starts with @claude", () => {
+    for (const body of ["@claude fix this", "  @claude please", "   @claude max indent", "\n\n@claude after blank lines", "\r\n@claude go", "@claude", "@claude\r\nand more", "@claude, plan it", "@claude: plan it", "@claude\tfix", "@Claude fix this", "@CLAUDE go", "@claude\u00a0fix this"]) {
+      expect(invoked(body), body).toBe(true);
+    }
+  });
+
+  it("ignores passing mentions, quotes, code and look-alike handles", () => {
+    for (const body of [
+      "Test done on an @claude comment. Closing.",
+      "Thanks!\n@claude go ahead",
+      "```\ncode\n```\n@claude after the block",
+      "<!-- note -->\n@claude after a comment",
+      "Example:\n```\n```js\n@claude fix this\n```",
+      "Type `\n@claude fix this\n` to trigger it",
+      "<pre>\n@claude fix this\n</pre>",
+      "> quoted\n@claude go",
+      "> @claude fix this",
+      "`@claude` is the trigger",
+      "@claudebot hi",
+      "@claude-dev hi",
+      "@claude_x hi",
+      "@claude's last run failed, closing.",
+      "@claude.",
+      "Example trigger:\n```\n@claude fix this\n```",
+      "Example:\n~~~md\n@claude fix this\n~~~",
+      "Unclosed fence:\n```\n@claude fix this",
+      "Example:\n\n    @claude fix this",
+      "\t@claude fix this",
+      "LGTM\n<!--\n@claude fix this\n-->",
+      "LGTM <!-- @claude fix this",
+      "",
+    ]) {
+      expect(invoked(body), body).toBe(false);
+    }
+  });
+
+  it("runs only on open issues and PRs, and treats a missing state as closed", () => {
+    expect(invoked("@claude fix this", "open")).toBe(true);
+    expect(invoked("@claude fix this", "OPEN")).toBe(true);
+    for (const state of ["closed", "CLOSED", "", "merged"]) expect(invoked("@claude fix this", state), state).toBe(false);
+    expect(invoked("@claude fix this", "open", "pull_request")).toBe(true);
+    expect(invoked("@claude fix this", "closed", "pull_request")).toBe(false);
+  });
+
+  it("handles a maximum-size comment (64K characters of emoji)", () => {
+    expect(invoked("@claude fix this\n" + "\u{1F600}".repeat(65_516))).toBe(true);
+    expect(invoked("hello\n" + "\u{1F600}".repeat(65_516))).toBe(false);
+  });
+
+  it("does not run shell in the comment body", () => {
+    const dir = mkdtempSync(join(tmpdir(), "invoke-cwd-"));
+    const cwd = process.cwd();
+    process.chdir(dir);
+    try {
+      invoked("@claude $(touch pwned) `touch pwned`");
+      expect(existsSync(join(dir, "pwned"))).toBe(false);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+});
 
 function reply(labels: string[] | string | undefined): string {
   const dir = mkdtempSync(join(tmpdir(), "gate-"));
@@ -35,8 +116,25 @@ describe("@claude gate reply", () => {
   it("asks for missing details on an issue that is only not ready", () => {
     for (const labels of [[], ["bug", "needs-info"]]) {
       const r = reply(labels);
-      expect(r).toContain("Add the missing details");
+      expect(r).toContain("add the missing details");
+      expect(r).toContain("Edit the issue description");
+      expect(r).toContain("comments do not trigger it");
       expect(r).not.toContain("flagged");
+    }
+  });
+
+  it("never tells a maintainer to add `ready` by hand to get past a flag alone", () => {
+    for (const labels of [["prompt-injection"], ["prompt-injection", "scan-cleared"]]) {
+      expect(reply(labels)).not.toMatch(/maintainer adds `ready`/);
+    }
+  });
+
+  it("on a flagged security issue, says a maintainer adds `ready`, since intake never will", () => {
+    for (const labels of [["prompt-injection", "security"], ["prompt-injection", "security", "scan-cleared"]]) {
+      const r = reply(labels);
+      expect(r).toContain("intake will not add `ready`");
+      expect(r).toContain("a maintainer adds `ready`");
+      expect(r).not.toContain("intake checks the issue again and adds `ready`");
     }
   });
 
@@ -45,14 +143,13 @@ describe("@claude gate reply", () => {
     expect(r).toContain("flagged as possible prompt injection");
     expect(r).toContain("`scan-cleared`");
     expect(r).not.toContain("missing details");
-    expect(r).toContain("adds `ready` and mentions @claude again");
+    expect(r).toContain("intake checks the issue again and adds `ready`");
   });
 
   it("never offers scan-cleared for a secret without saying it does not apply", () => {
     const r = reply(["prompt-injection", "security"]);
     expect(r).toContain("rotate it now");
     expect(r).toContain("does not override a secret");
-    expect(r).toContain("adds `ready` and mentions @claude again");
   });
 
   it("does not claim a secret, since `security` may mean a vulnerability report", () => {
@@ -86,15 +183,16 @@ describe("@claude gate reply", () => {
     }
   });
 
-  it("does not ask for scan-cleared again once it is there", () => {
+  it("does not ask for scan-cleared again once it is there, or claim the flag is gone", () => {
     const r = reply(["prompt-injection", "scan-cleared"]);
-    expect(r).toContain("was cleared");
+    expect(r).toContain("still labeled `prompt-injection`");
+    expect(r).toContain("removing `prompt-injection`");
+    expect(r).not.toContain("was cleared");
     expect(r).not.toMatch(/maintainer adds `scan-cleared`/);
-    expect(r).toContain("adds `ready` and mentions @claude again");
   });
 
   it("does not split a label whose name contains a comma", () => {
-    expect(reply(["wontfix,prompt-injection"])).toContain("Add the missing details");
+    expect(reply(["wontfix,prompt-injection"])).toContain("add the missing details");
   });
 
   it("handles quoted or shell-like label names without expanding them", () => {
@@ -110,7 +208,108 @@ describe("@claude gate reply", () => {
   });
 
   it("matches label names exactly", () => {
-    expect(reply(["prompt-injection-review"])).toContain("Add the missing details");
+    expect(reply(["prompt-injection-review"])).toContain("add the missing details");
     expect(reply(["prompt-injection", "security-review"])).toContain("flagged as possible prompt injection");
+  });
+});
+
+function runStep(marker: string, mustContain: string, env: Record<string, string>, ghOutput = "[]"): Record<string, string> {
+  const dir = mkdtempSync(join(tmpdir(), "step-"));
+  const out = join(dir, "out");
+  writeFileSync(out, "");
+  // Stub gh: `gh <kind> view ... --jq ...` prints the label list.
+  writeFileSync(join(dir, "gh"), `#!/usr/bin/env bash\nprintf '%s\\n' '${ghOutput}'\n`);
+  chmodSync(join(dir, "gh"), 0o755);
+  execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript(marker, mustContain)], {
+    env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, KIND: "issue", NUM: "1", ...env },
+  });
+  return Object.fromEntries(readFileSync(out, "utf8").trim().split("\n").filter(Boolean).map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+}
+
+describe("@claude live labels", () => {
+  const labels = (live: string[], blocked = "false", secret = "false") =>
+    runStep("live-labels", "flagged=", { BLOCKED: blocked, SECRET: secret }, JSON.stringify(live));
+
+  it("adds what the scan just found to the live labels", () => {
+    const o = labels(["bug"], "true", "true");
+    expect(JSON.parse(o.json!)).toEqual(["bug", "prompt-injection", "security"]);
+    expect(o.flagged).toBe("true");
+    expect(o.ready).toBe("false");
+  });
+
+  it("treats any live prompt-injection label as flagged, even with scan-cleared", () => {
+    expect(labels(["ready", "prompt-injection"]).flagged).toBe("true");
+    expect(labels(["ready", "Prompt-Injection"]).flagged).toBe("true");
+    expect(labels(["ready", "prompt-injection", "scan-cleared"]).flagged).toBe("true");
+    expect(labels(["ready", "scan-cleared"]).flagged).toBe("false");
+    expect(labels(["Ready"]).ready).toBe("true");
+  });
+
+  it("agrees with the scan: a blocked scan is flagged even with scan-cleared (a secret)", () => {
+    expect(labels(["ready", "scan-cleared"], "true", "true").flagged).toBe("true");
+  });
+});
+
+describe("@claude decide", () => {
+  const decide = (env: Record<string, string>, kind = "issue") =>
+    runStep("decide", "run=", { KIND: kind, INVOKED: "true", BLOCKED: "false", FLAGGED: "false", READY: "true", ...env }).run;
+
+  it("runs only on a clean, unflagged, ready issue or a clean, unflagged PR", () => {
+    expect(decide({})).toBe("true");
+    expect(decide({ READY: "" }, "pr")).toBe("true");
+  });
+
+  it("does not run when anything is off or missing", () => {
+    const cases: Record<string, string>[] = [{ INVOKED: "false" }, { BLOCKED: "true" }, { FLAGGED: "true" }, { READY: "false" }, { BLOCKED: "" }, { FLAGGED: "" }, { INVOKED: "" }];
+    for (const env of cases) {
+      expect(decide(env), JSON.stringify(env)).toBe("false");
+    }
+    expect(decide({ FLAGGED: "true" }, "pr")).toBe("false");
+  });
+});
+
+describe("claude job: scan again just before Claude reads the thread", () => {
+  // Runs the step from a scratch workspace with stub npm/npx/gh. `scan` is the scanner's exit code.
+  function rescan(kind: "issue" | "pr", labels: string[] | "fail", scan = 0): { status: number; scannerGone: boolean } {
+    const ws = mkdtempSync(join(tmpdir(), "rescan-"));
+    const bin = mkdtempSync(join(tmpdir(), "rescan-bin-"));
+    const scanner = join(ws, ".scanner");
+    execFileSync("mkdir", [scanner]);
+    writeFileSync(join(bin, "npm"), "#!/usr/bin/env bash\nexit 0\n");
+    writeFileSync(join(bin, "npx"), `#!/usr/bin/env bash\nexit ${scan}\n`);
+    const view = labels === "fail" ? "exit 1" : `jq -r '[.labels[].name | ascii_downcase]' <<<'${JSON.stringify({ labels: labels.map((name) => ({ name })) })}'`;
+    writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash\n${view}\n`);
+    for (const f of ["npm", "npx", "gh"]) chmodSync(join(bin, f), 0o755);
+    let status = 0;
+    try {
+      execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", stepScript("rescan", "recheck")], {
+        cwd: scanner, env: { PATH: `${bin}:${process.env.PATH}`, KIND: kind, NUM: "1" }, stdio: "pipe",
+      });
+    } catch (e) {
+      status = (e as { status: number }).status;
+    }
+    return { status, scannerGone: !existsSync(scanner) };
+  }
+
+  it("lets Claude run only on an explicit go", () => {
+    expect(rescan("issue", ["ready", "bug"])).toEqual({ status: 0, scannerGone: true });
+    expect(rescan("pr", [])).toEqual({ status: 0, scannerGone: true });
+  });
+
+  it("stops when the thread was flagged or lost ready after the gate decided", () => {
+    expect(rescan("issue", ["ready", "prompt-injection"]).status).not.toBe(0);
+    expect(rescan("pr", ["Prompt-Injection"]).status).not.toBe(0);
+    expect(rescan("issue", ["needs-info"]).status).not.toBe(0);
+  });
+
+  it("fails closed when the labels cannot be read or the scan blocks", () => {
+    expect(rescan("issue", "fail").status).not.toBe(0);
+    expect(rescan("issue", ["ready"], 1).status).not.toBe(0);
+  });
+});
+
+describe("claude.yml shell", () => {
+  it("runs every step with -eo pipefail, like these tests", () => {
+    expect(readFileSync(WORKFLOW, "utf8")).toMatch(/^defaults:\n {2}run:\n {4}shell: bash$/m);
   });
 });
