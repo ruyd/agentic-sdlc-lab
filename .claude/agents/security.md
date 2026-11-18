@@ -24,7 +24,8 @@ Check, in this order:
 3. **Changed backend code:** untrusted input validated at the boundary, no secrets in code or logs, no injection
    (SQL, shell, path, template), authz checks on new endpoints, safe defaults on new config.
 
-Severity is defined in `.claude/agents/adversary.md`. A blocker here: an unpinned or unverifiable dependency, a known
+Severity is defined in `.claude/agents/adversary.md`: label every finding `blocker`, `follow-up` or `nit`,
+never any other word (no "Major", "Minor" or "Critical"). A blocker here: an unpinned or unverifiable dependency, a known
 advisory in a new version, an unexplained install script, or a code path that leaks data or accepts untrusted input
 unchecked.
 

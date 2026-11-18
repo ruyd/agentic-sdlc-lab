@@ -21,7 +21,8 @@ Check:
 6. **Forms and flows.** Inline validation that does not fire too early, preserved input on error, sensible tab order,
    confirmation before destructive actions.
 
-Severity is defined in `.claude/agents/adversary.md`. A blocker here: a user cannot complete the task, cannot use it
+Severity is defined in `.claude/agents/adversary.md`: label every finding `blocker`, `follow-up` or `nit`,
+never any other word (no "Major", "Minor" or "Critical"). A blocker here: a user cannot complete the task, cannot use it
 by keyboard or screen reader, loses input, or cannot tell an error happened.
 
 Write `runs/ux.md`: findings first (component or file, line, severity, what the user experiences, suggested fix), then
