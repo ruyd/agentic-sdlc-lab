@@ -36,7 +36,6 @@ export function route(files: string[], cfg: RoutingConfig): Route {
   return { ...r, reviews };
 }
 
-/** Throws on a config that would silently route nothing, so a typo fails loudly. */
 /** Why the synthetic user test cannot run, or null when it can (it needs a way to start the app and a script). */
 export function usertestBlocker(cfg: RoutingConfig, scriptExists: boolean): string | null {
   if (!cfg.frontendApp.start) return "no frontendApp.start command in review-routing.json";
@@ -45,6 +44,7 @@ export function usertestBlocker(cfg: RoutingConfig, scriptExists: boolean): stri
   return null;
 }
 
+/** Throws on a config that would silently route nothing, so a typo fails loudly. */
 export function validateConfig(cfg: unknown): RoutingConfig {
   const c = cfg as Partial<RoutingConfig>;
   const list = (v: unknown, name: string) => {
