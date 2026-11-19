@@ -55,3 +55,39 @@ export function parseNpmView(json: string, version: string): { published?: strin
   const deprecated = typeof o.deprecated === "string" ? o.deprecated : undefined;
   return { published, deprecated };
 }
+
+export interface RegistryFacts { installScripts: Record<string, string>; license: string; maintainers: string[]; repository: string }
+const INSTALL_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"];
+
+/** Facts the security review compares between versions, from `npm view <pkg>@<v> --json` (the full manifest). */
+export function parseRegistryFacts(json: string): RegistryFacts | null {
+  let m: unknown;
+  try { m = JSON.parse(json || "null"); } catch { return null; }
+  if (Array.isArray(m)) m = m[m.length - 1]; // a range matching several versions prints a list; take the last
+  if (!m || typeof m !== "object") return null;
+  const o = m as Record<string, unknown>;
+  const scripts = (o.scripts && typeof o.scripts === "object" ? o.scripts : {}) as Record<string, unknown>;
+  const installScripts = Object.fromEntries(INSTALL_SCRIPTS.filter((k) => typeof scripts[k] === "string").map((k) => [k, scripts[k] as string]));
+  const person = (p: unknown) => (typeof p === "string" ? p.replace(/\s*<.*$/, "") : p && typeof p === "object" ? String((p as { name?: unknown }).name ?? "") : "");
+  const maintainers = (Array.isArray(o.maintainers) ? o.maintainers.map(person) : []).filter(Boolean).sort();
+  const repo = o.repository;
+  const repository = typeof repo === "string" ? repo : repo && typeof repo === "object" ? String((repo as { url?: unknown }).url ?? "") : "";
+  return { installScripts, license: typeof o.license === "string" ? o.license : "", maintainers, repository };
+}
+
+/** What changed between two versions that the security review must look at ("" when nothing did). */
+export function registryChanges(from: RegistryFacts | null, to: RegistryFacts | null): string[] {
+  if (!to) return ["registry details unavailable"];
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(to.installScripts)) {
+    if (from?.installScripts[k] !== v) out.push(`${from && k in from.installScripts ? "changed" : "new"} install script \`${k}\`: \`${v}\``);
+  }
+  if (from && from.license !== to.license) out.push(`license ${from.license || "(none)"} → ${to.license || "(none)"}`);
+  if (from && from.repository !== to.repository) out.push(`repository ${from.repository || "(none)"} → ${to.repository || "(none)"}`);
+  if (from) {
+    const added = to.maintainers.filter((x) => !from.maintainers.includes(x));
+    const removed = from.maintainers.filter((x) => !to.maintainers.includes(x));
+    if (added.length || removed.length) out.push(`maintainers${added.length ? ` +${added.join(", +")}` : ""}${removed.length ? ` -${removed.join(", -")}` : ""}`);
+  }
+  return out;
+}

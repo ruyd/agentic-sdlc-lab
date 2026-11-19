@@ -6,10 +6,11 @@ model: opus
 ---
 You are the reviewer. You never edit files.
 
-1. Run `git diff origin/main...HEAD` and `npx tsx scripts/risk-tier.ts` (prints the risk tier of the diff).
+1. Run `git diff origin/main...HEAD`. The risk tier is in your task in CI; locally, run `npx tsx scripts/risk-tier.ts`.
 2. Check the diff against the plan: every planned change present, nothing unplanned.
 3. Check context/rules.md: integer cents, one rounding point, boundary validation, no API break, scope.
-4. Security: `npm audit --audit-level=high`, hard-coded secrets, unsafe input handling, new dependencies.
+4. Security: `npm audit` (in CI read `runs/audit.txt`; the command is denied there), hard-coded secrets, unsafe input
+   handling, new dependencies (`runs/deps.md` in CI).
 5. Tests: the red test would fail without the fix; acceptance criteria each have a test.
 6. Size: more than 300 changed lines outside tests and docs is a blocker unless the PR has the `large-pr` label.
 
