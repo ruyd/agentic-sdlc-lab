@@ -6,6 +6,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
+import { mayMentionSlashCommands, resolveRef } from "./lib/drift.js";
 
 const DOCS = ["README.md", "CLAUDE.md", ...gitFiles().filter((f) => f.startsWith("docs/") && f.endsWith(".md"))];
 const BUILTIN_SLASH_COMMANDS = new Set(["install-github-app", "init", "review", "help", "exit", "config", "permissions", "hooks", "agents", "mcp"]);
@@ -43,7 +44,7 @@ for (const doc of DOCS) {
 }
 
 // 2. Slash commands mentioned in docs must exist in .claude/commands or .claude/skills.
-for (const doc of DOCS) {
+for (const doc of DOCS.filter(mayMentionSlashCommands)) {
   const text = readFileSync(doc, "utf8");
   for (const m of text.matchAll(/`\/([a-z][a-z0-9-]*)[^`]*`/g)) {
     const name = m[1]!;
@@ -68,13 +69,16 @@ for (const doc of DOCS) {
     if (!/^[a-z]+:/.test(link)) refs.add(new URL(link, `file:///${docDir}`).pathname.slice(1));
   }
   for (const ref of refs) {
-    const exists = ref.endsWith("/")
-      ? trackedDirs.has(ref)
-      : ref.includes("/")
-        ? tracked.includes(ref) || trackedDirs.has(ref + "/")
-        : trackedBasenames.has(ref);
+    // `.agent-base/x` is this repo's own `x` in a member checkout; `.agent-base/` alone is this repo's root.
+    const path = resolveRef(ref);
+    if (path === "") { checked.push(`path \`${ref}\` (${doc}) is this repository's root in a member checkout`); continue; }
+    const exists = path.endsWith("/")
+      ? trackedDirs.has(path)
+      : path.includes("/")
+        ? tracked.includes(path) || trackedDirs.has(path + "/")
+        : trackedBasenames.has(path);
     if (exists) checked.push(`path \`${ref}\` (${doc})`);
-    else if (isIgnored(ref)) checked.push(`path \`${ref}\` (${doc}) is generated and gitignored, skipped`);
+    else if (isIgnored(path)) checked.push(`path \`${ref}\` (${doc}) is generated and gitignored, skipped`);
     else drift.push(`${doc} references \`${ref}\`, which is not a tracked file or folder`);
   }
 }
