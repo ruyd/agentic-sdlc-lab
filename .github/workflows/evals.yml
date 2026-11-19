@@ -6,6 +6,11 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# `shell: bash` runs every step with -eo pipefail. Without it, `cmd | tee` takes tee's exit code, so a failing
+# gate passes (test/workflow-shell.test.ts enforces this for every workflow with run steps).
+defaults:
+  run:
+    shell: bash
 jobs:
   evals:
     # Secrets are not available to fork PRs; skip them instead of failing.

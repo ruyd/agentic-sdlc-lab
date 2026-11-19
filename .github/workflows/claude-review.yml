@@ -23,6 +23,11 @@ concurrency:
         || (github.event.action == 'labeled' && github.event.label.name != 'scan-cleared' && github.event.label.name != 'review-again'))
       && github.run_id || 'agents' }}
   cancel-in-progress: true
+# `shell: bash` runs every step with -eo pipefail. Without it, `cmd | tee` takes tee's exit code, so a failing
+# gate passes (test/workflow-shell.test.ts enforces this for every workflow with run steps).
+defaults:
+  run:
+    shell: bash
 jobs:
   gates:
     if: github.event.pull_request.draft == false
