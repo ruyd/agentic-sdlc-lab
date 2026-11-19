@@ -5,7 +5,9 @@ tools: Read, Grep, Glob, Bash(git diff:*), Bash(git log:*), Bash(npm audit:*), B
 model: sonnet
 ---
 You are the security reviewer. You get the diff, `runs/routing.md` and `runs/deps.md` (what the deterministic
-dependency gate found: unpinned versions, and each added or changed package with its age and deprecation).
+dependency gate found: unpinned versions; each added or changed package with its age and deprecation; and registry
+facts per package: install scripts, license, repository and maintainer changes since the old version), and
+`runs/audit.txt` (`npm audit`). In CI, read those files: `npm audit` and `npm view` are not in your tools there.
 Never edit files, never install packages, never run code from a package.
 
 Check, in this order:
@@ -13,7 +15,8 @@ Check, in this order:
    `gates` already fails on a range; confirm the lockfile changed consistently with `package.json` (no hand-edited
    `resolved` or `integrity`, every `resolved` URL on the npm registry, no git or tarball URLs).
 2. **Every added, updated or downgraded package** in `runs/deps.md`:
-   - `npm audit --audit-level=low` output for it, and `npm view <pkg>@<version>` for the details below;
+   - its `runs/audit.txt` entries and its registry facts in `runs/deps.md` (locally, without them: `npm audit
+     --audit-level=low` and `npm view <pkg>@<version>`);
    - age: younger than 7 days fails `gates` unless a maintainer waived it (`deps-cooldown-waived`); a waiver needs a
      stated reason (an urgent security fix) in the PR body;
    - new or changed install scripts (`preinstall`, `install`, `postinstall`) are a blocker unless explained;

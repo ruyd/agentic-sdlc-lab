@@ -10,6 +10,11 @@ permissions:
   contents: read
   pull-requests: read
   issues: read
+# `shell: bash` runs every step with -eo pipefail. Without it, `cmd | tee` takes tee's exit code, so a failing
+# gate passes (test/workflow-shell.test.ts enforces this for every workflow with run steps).
+defaults:
+  run:
+    shell: bash
 jobs:
   metrics:
     runs-on: ubuntu-latest

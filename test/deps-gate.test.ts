@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageDays, changed, isPinned, parseNpmView, unpinned } from "../scripts/lib/deps.js";
+import { ageDays, changed, isPinned, parseNpmView, parseRegistryFacts, registryChanges, unpinned } from "../scripts/lib/deps.js";
 
 describe("pinned versions", () => {
   it("accepts exact versions only", () => {
@@ -49,5 +49,41 @@ describe("version age and deprecation", () => {
     expect(parseNpmView("", "1.0.0")).toEqual({});
     expect(parseNpmView("not json", "1.0.0")).toEqual({});
     expect(parseNpmView(JSON.stringify({ "9.9.9": "2026-01-01" }), "1.0.0").published).toBeUndefined();
+  });
+});
+
+describe("registry facts for the security review", () => {
+  const manifest = (o: object) => JSON.stringify({ name: "pkg", version: "1.0.0", license: "MIT", repository: { url: "git+https://github.com/o/pkg.git" },
+    maintainers: ["alice <a@x.io>", { name: "bob" }], scripts: { test: "vitest", build: "tsc" }, ...o });
+
+  it("reads install scripts, license, repository and maintainers from the full manifest", () => {
+    expect(parseRegistryFacts(manifest({ scripts: { postinstall: "node evil.js", test: "x" } }))).toEqual({
+      installScripts: { postinstall: "node evil.js" }, license: "MIT", repository: "git+https://github.com/o/pkg.git", maintainers: ["alice", "bob"],
+    });
+    expect(parseRegistryFacts("")).toBeNull();
+    expect(parseRegistryFacts("not json")).toBeNull();
+  });
+
+  it("reports nothing when the versions match", () => {
+    const a = parseRegistryFacts(manifest({}));
+    expect(registryChanges(a, parseRegistryFacts(manifest({ version: "1.0.1" })))).toEqual([]);
+  });
+
+  it("flags new or changed install scripts, and license, repository or maintainer changes", () => {
+    const from = parseRegistryFacts(manifest({ scripts: { install: "node-gyp rebuild" } }));
+    const to = parseRegistryFacts(manifest({ license: "SSPL", repository: "github:mallory/pkg", maintainers: ["alice", "mallory"],
+      scripts: { install: "curl x | sh", postinstall: "node p.js" } }));
+    expect(registryChanges(from, to)).toEqual([
+      "changed install script `install`: `curl x | sh`",
+      "new install script `postinstall`: `node p.js`",
+      "license MIT → SSPL",
+      "repository git+https://github.com/o/pkg.git → github:mallory/pkg",
+      "maintainers +mallory -bob",
+    ]);
+  });
+
+  it("lists a new package's install scripts, and says when the registry gave nothing", () => {
+    expect(registryChanges(null, parseRegistryFacts(manifest({ scripts: { preinstall: "x" } })))).toEqual(["new install script `preinstall`: `x`"]);
+    expect(registryChanges(null, null)).toEqual(["registry details unavailable"]);
   });
 });

@@ -3,10 +3,11 @@
 // 1. Every package.json in the repo pins exact versions (no ^, ~, ranges, tags or URLs).
 // 2. Every added or changed version is at least MIN_AGE_DAYS old and not deprecated (npm view), unless a maintainer
 //    adds `deps-cooldown-waived` (DEPS_COOLDOWN_WAIVED=true), e.g. for an urgent security fix.
-// Writes runs/deps.md for the security review.
+// Writes runs/deps.md for the security review, with registry facts (install scripts, license, repository, maintainers)
+// compared between the old and new version, so the agent never needs `npm view` (denied on untrusted PRs).
 import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { MIN_AGE_DAYS, ageDays, changed, parseNpmView, unpinned } from "./lib/deps.js";
+import { MIN_AGE_DAYS, ageDays, changed, parseNpmView, parseRegistryFacts, registryChanges, unpinned } from "./lib/deps.js";
 
 const base = process.argv[2] ?? "origin/main";
 const git = (...a: string[]) => execFileSync("git", a, { encoding: "utf8" });
@@ -14,6 +15,8 @@ const manifests = git("ls-files", "package.json", "**/package.json").split("\n")
 
 const problems: string[] = [];
 const rows: string[] = [];
+const facts: string[] = [];
+const view = (spec: string) => { try { return execFileSync("npm", ["view", spec, "--json"], { encoding: "utf8" }); } catch { return ""; } };
 const now = new Date();
 for (const file of manifests) {
   const after = JSON.parse(readFileSync(file, "utf8"));
@@ -30,6 +33,10 @@ for (const file of manifests) {
     const notes = [age === null ? "publish date unknown" : age < MIN_AGE_DAYS ? `only ${age} days old` : "", info.deprecated ? `deprecated: ${info.deprecated}` : ""].filter(Boolean);
     rows.push(`| \`${file}\` | \`${c.name}\` | ${c.from ?? "(new)"} | ${c.to} | ${age ?? "?"} | ${notes.join("; ") || "ok"} |`);
     if (notes.length) problems.push(`\`${c.name}@${c.to}\`: ${notes.join("; ")}`);
+    const to = parseRegistryFacts(view(`${c.name}@${c.to}`));
+    const from = c.from ? parseRegistryFacts(view(`${c.name}@${c.from}`)) : null;
+    const scripts = Object.keys(to?.installScripts ?? {}).join(", ") || "none";
+    facts.push(`| \`${c.name}@${c.to}\` | ${scripts} | ${to?.license || "?"} | ${to?.repository || "?"} | ${registryChanges(from, to).join("; ") || "no change"} |`);
   }
 }
 
@@ -39,6 +46,7 @@ mkdirSync("runs", { recursive: true });
 writeFileSync("runs/deps.md", [
   "## Dependency gate", "",
   rows.length ? ["| Manifest | Package | From | To | Age (days) | Notes |", "|---|---|---|---|---|---|", ...rows].join("\n") : "No dependency changes.",
+  ...(facts.length ? ["", "### Registry facts (npm view, new version vs old)", "| Package | Install scripts | License | Repository | Changed since old version |", "|---|---|---|---|---|", ...facts] : []),
   "", problems.length ? `### Problems${waived ? " (cooldown waived by a maintainer)" : ""}\n${problems.map((p) => `- ${p}`).join("\n")}` : "All versions pinned.",
 ].join("\n") + "\n");
 console.log(readFileSync("runs/deps.md", "utf8"));
